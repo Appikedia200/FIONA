@@ -1,0 +1,6 @@
+name               = "fiona-google"
+main               = "worker.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+BACKEND_URL = "https://frugality-gratuity-effects.ngrok-free.dev"

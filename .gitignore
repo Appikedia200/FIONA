@@ -1,0 +1,51 @@
+# Node modules
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# Build outputs
+backend/dist/
+backend/build/
+frontend/.next/
+frontend/out/
+frontend/build/
+web-panel/.next/
+google/_next/
+backend/public/**/_next/
+dist/
+
+# Database
+backend/prisma/*.db
+backend/prisma/*.db-journal
+backend/prisma/prisma/*.db
+*.db
+*.db-journal
+
+# Logs
+*.log
+logs/
+pm2.log
+
+# Environment
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large archives
+*.zip
+*.tar.gz
+*.rar
+
+# Secret files
+update-dns.js
+backend/.env.productionupdate-dns.js
+backend/.env.production

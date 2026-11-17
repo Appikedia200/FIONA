@@ -1,0 +1,57 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-base: #0C0E14;
+    --bg-surface: #12151E;
+    --bg-elevated: #1A1E2E;
+    --border: #252A3A;
+    --accent: #4F7FFF;
+    --accent-dim: #1E3A8A;
+    --live: #22D3A5;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --text-primary: #E2E8F0;
+    --text-muted: #64748B;
+    --text-dim: #334155;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .font-mono {
+    font-family: 'Geist Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
+  }
+
+  /* PERMANENTLY HIDE NEXT.JS DEV INDICATOR */
+  #__next-build-watcher,
+  .__next-build-watcher,
+  [data-nextjs-scroll-focus-boundary],
+  [id^="__next"],
+  .__next-dev-overlay,
+  [class*="nextjs"],
+  [class*="__next"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+}
