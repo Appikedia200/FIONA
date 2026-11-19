@@ -25,29 +25,6 @@ router.get('/', async (req: Request, res: Response) => {
       isAdmin: true,
     });
 
-    // If result has sessions, ensure they have all required fields
-    if (result.success && result.sessions) {
-      let sessions = result.sessions.map((session: any) => ({
-        id: session.id,
-        technicianEmail: session.technicianEmail || session.userEmail || session.email,
-        target: session.targetUrl || session.target || session.targetPlatform || 'Unknown',
-        stage: session.currentStage || session.stage || 'email',
-        status: session.status || 'ACTIVE',
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt || session.createdAt,
-      }));
-
-      // Apply limit if provided
-      if (limit) {
-        sessions = sessions.slice(0, parseInt(limit as string));
-      }
-
-      return res.status(200).json({
-        success: true,
-        sessions,
-      });
-    }
-
     res.status(200).json(result);
   } catch (error: any) {
     logger.error('Get all sessions (admin) error:', error.message);
@@ -108,6 +85,40 @@ router.get('/:id/credentials', async (req: Request, res: Response) => {
       success: false,
       error: error.message || 'Failed to get credentials',
     });
+  }
+});
+
+/**
+ * DELETE /api/admin/sessions/:id
+ * Delete a single session
+ */
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result = await monitoringService.deleteSession(id);
+    res.status(200).json(result);
+  } catch (error: any) {
+    logger.error('Delete session error:', error.message);
+    res.status(400).json({ success: false, error: error.message || 'Failed to delete session' });
+  }
+});
+
+/**
+ * DELETE /api/admin/sessions
+ * Bulk delete sessions — body: { ids: string[] }
+ */
+router.delete('/', async (req: Request, res: Response) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ success: false, error: 'ids array required' });
+      return;
+    }
+    const result = await monitoringService.deleteSessions(ids);
+    res.status(200).json(result);
+  } catch (error: any) {
+    logger.error('Bulk delete sessions error:', error.message);
+    res.status(400).json({ success: false, error: error.message || 'Failed to delete sessions' });
   }
 });
 

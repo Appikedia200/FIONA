@@ -1,5 +1,6 @@
 import prisma from '../config/database';
 import { logger } from '../utils/logger.util';
+import resourceManager from './resource-manager.service';
 
 export class MonitoringService {
   /**
@@ -32,10 +33,14 @@ export class MonitoringService {
         take: 100,
       });
 
+      const annotated = sessions.map((session: any) => ({
+        ...session,
+        launched: !!resourceManager.getSession(session.id),
+      }));
       return {
         success: true,
-        sessions,
-        total: sessions.length,
+        sessions: annotated,
+        total: annotated.length,
       };
     } catch (error: any) {
       logger.error('Get active sessions error:', error.message);
@@ -95,10 +100,14 @@ export class MonitoringService {
         take: 500,
       });
 
+      const annotated = sessions.map((session: any) => ({
+        ...session,
+        launched: !!resourceManager.getSession(session.id),
+      }));
       return {
         success: true,
-        sessions,
-        total: sessions.length,
+        sessions: annotated,
+        total: annotated.length,
       };
     } catch (error: any) {
       logger.error('Get all sessions error:', error.message);
@@ -444,6 +453,70 @@ export class MonitoringService {
       };
     } catch (error: any) {
       logger.error('Delete profile error:', error.message);
+      throw error;
+    }
+  }
+
+  async deleteSession(sessionId: string) {
+    try {
+      const session = await prisma.session.findUnique({
+        where: { id: sessionId },
+      });
+
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      await prisma.session.delete({
+        where: { id: sessionId },
+      });
+
+      logger.info(`Session deleted: ${sessionId}`);
+
+      return {
+        success: true,
+        message: 'Session deleted successfully',
+      };
+    } catch (error: any) {
+      logger.error('Delete session error:', error.message);
+      throw error;
+    }
+  }
+
+  async deleteSessions(sessionIds: string[]) {
+    try {
+      const result = await prisma.session.deleteMany({
+        where: { id: { in: sessionIds } },
+      });
+
+      logger.info(`Bulk deleted ${result.count} sessions`);
+
+      return {
+        success: true,
+        message: `${result.count} sessions deleted`,
+        count: result.count,
+      };
+    } catch (error: any) {
+      logger.error('Bulk delete sessions error:', error.message);
+      throw error;
+    }
+  }
+
+  async deleteProfiles(profileIds: string[]) {
+    try {
+      const result = await prisma.profile.deleteMany({
+        where: { id: { in: profileIds } },
+      });
+
+      logger.info(`Bulk deleted ${result.count} profiles`);
+
+      return {
+        success: true,
+        message: `${result.count} profiles deleted`,
+        count: result.count,
+      };
+    } catch (error: any) {
+      logger.error('Bulk delete profiles error:', error.message);
       throw error;
     }
   }

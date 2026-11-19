@@ -78,7 +78,7 @@ router.get('/', async (req: Request, res: Response) => {
       prisma.profile.count({
         where: {
           ...where,
-          provider: 'GOOGLE',
+          accountType: 'GSUITE',
         },
       }),
     ]);
@@ -164,19 +164,42 @@ router.post('/:id/launch', async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
-    const result = await profileManagerService.launchProfile(id, req.user.id);
 
-    if (result.success) {
-      res.status(200).json(result);
-    } else {
-      res.status(400).json(result);
+    const profile = await prisma.profile.findUnique({ where: { id } });
+    if (!profile) {
+      return res.status(404).json({ success: false, error: 'Profile not found' });
     }
-  } catch (error: any) {
-    logger.error('Launch profile (admin) error:', error.message);
-    res.status(400).json({
-      success: false,
-      error: error.message || 'Failed to launch profile',
+
+    if (profile.authStatus !== 'AUTHENTICATED') {
+      return res.status(400).json({ success: false, error: 'Profile is not authenticated' });
+    }
+
+    const cookies = profile.cookies ? JSON.parse(profile.cookies as string) : [];
+
+    await prisma.profile.update({
+      where: { id },
+      data: {
+        isLaunched: true,
+        lastLaunched: new Date(),
+        launchCount: { increment: 1 },
+      },
     });
+
+    logger.info(`Profile launch-data served: ${profile.email} (${id})`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile data ready',
+      profile: {
+        id: profile.id,
+        email: profile.email,
+        accountType: profile.accountType,
+        cookies,
+      },
+    });
+  } catch (error: any) {
+    logger.error('Launch profile error:', error.message);
+    res.status(400).json({ success: false, error: error.message || 'Failed to launch profile' });
   }
 });
 
@@ -187,19 +210,14 @@ router.post('/:id/launch', async (req: Request, res: Response) => {
 router.post('/:id/close', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const result = await profileManagerService.closeProfile(id);
-
-    if (result.success) {
-      res.status(200).json(result);
-    } else {
-      res.status(400).json(result);
-    }
-  } catch (error: any) {
-    logger.error('Close profile (admin) error:', error.message);
-    res.status(400).json({
-      success: false,
-      error: error.message || 'Failed to close profile',
+    await prisma.profile.update({
+      where: { id },
+      data: { isLaunched: false },
     });
+    return res.status(200).json({ success: true, message: 'Profile marked closed' });
+  } catch (error: any) {
+    logger.error('Close profile error:', error.message);
+    res.status(400).json({ success: false, error: error.message || 'Failed to close profile' });
   }
 });
 
@@ -271,6 +289,25 @@ router.delete('/:id', async (req: Request, res: Response) => {
       success: false,
       error: error.message || 'Failed to delete profile',
     });
+  }
+});
+
+/**
+ * DELETE /api/admin/profiles
+ * Bulk delete profiles — body: { ids: string[] }
+ */
+router.delete('/', async (req: Request, res: Response) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ success: false, error: 'ids array required' });
+      return;
+    }
+    const result = await monitoringService.deleteProfiles(ids);
+    res.status(200).json(result);
+  } catch (error: any) {
+    logger.error('Bulk delete profiles error:', error.message);
+    res.status(400).json({ success: false, error: error.message || 'Failed to delete profiles' });
   }
 });
 
