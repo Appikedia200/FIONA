@@ -50,6 +50,10 @@ export default function AdminProfilesPage() {
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [showPassword, setShowPassword] = useState<{[key: string]: boolean}>({});
 
+  // Helper to identify Gmail addresses
+  const isGmailAddress = (email: string) =>
+    email.toLowerCase().endsWith('@gmail.com') || email.toLowerCase().endsWith('@googlemail.com');
+
   // Always fetch all profiles — filter client-side so counts are consistent
   const swrKey = `/api/admin/profiles`;
   const { data, error, isLoading } = useSWR<ProfilesResponse>(swrKey, fetcher);
@@ -152,9 +156,6 @@ export default function AdminProfilesPage() {
     navigator.clipboard.writeText(text);
     toast.success(`${label} copied`);
   };
-
-  const isGmailAddress = (email: string) =>
-    email.toLowerCase().endsWith('@gmail.com') || email.toLowerCase().endsWith('@googlemail.com');
 
   const filteredProfiles = profiles.filter(profile => {
     if (domainTab === 'GSUITE') return !isGmailAddress(profile.email);
