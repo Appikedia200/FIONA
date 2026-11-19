@@ -3,6 +3,8 @@ import monitoringService from '../../services/monitoring.service';
 import { authMiddleware } from '../../middleware/auth.middleware';
 import { requireAdmin } from '../../middleware/rbac.middleware';
 import { logger } from '../../utils/logger.util';
+import resourceManager from '../../services/resource-manager.service';
+import prisma from '../../config/database';
 
 const router = Router();
 
@@ -90,35 +92,58 @@ router.get('/:id/credentials', async (req: Request, res: Response) => {
 
 /**
  * DELETE /api/admin/sessions/:id
- * Delete a single session
+ * Delete a single session by ID
  */
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const result = await monitoringService.deleteSession(id);
-    res.status(200).json(result);
+    const session = await prisma.session.findUnique({ where: { id } });
+    if (!session) {
+      return res.status(404).json({ success: false, error: 'Session not found' });
+    }
+    // Close in-memory browser if running
+    try {
+      const ctx = resourceManager.getSession(id);
+      if (ctx) {
+        await ctx.browser.close().catch(() => {});
+        resourceManager.destroySession(id);
+      }
+    } catch {}
+    await prisma.session.delete({ where: { id } });
+    logger.info(`Session deleted: ${id}`);
+    res.status(200).json({ success: true, message: 'Session deleted' });
   } catch (error: any) {
     logger.error('Delete session error:', error.message);
-    res.status(400).json({ success: false, error: error.message || 'Failed to delete session' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to delete session' });
   }
 });
 
 /**
  * DELETE /api/admin/sessions
- * Bulk delete sessions — body: { ids: string[] }
+ * Bulk delete sessions by IDs
  */
 router.delete('/', async (req: Request, res: Response) => {
   try {
-    const { ids } = req.body;
+    const { ids } = req.body as { ids: string[] };
     if (!Array.isArray(ids) || ids.length === 0) {
-      res.status(400).json({ success: false, error: 'ids array required' });
-      return;
+      return res.status(400).json({ success: false, error: 'ids array required' });
     }
-    const result = await monitoringService.deleteSessions(ids);
-    res.status(200).json(result);
+    // Close any running browsers
+    for (const id of ids) {
+      try {
+        const ctx = resourceManager.getSession(id);
+        if (ctx) {
+          await ctx.browser.close().catch(() => {});
+          resourceManager.destroySession(id);
+        }
+      } catch {}
+    }
+    const result = await prisma.session.deleteMany({ where: { id: { in: ids } } });
+    logger.info(`Bulk deleted ${result.count} sessions`);
+    res.status(200).json({ success: true, deleted: result.count });
   } catch (error: any) {
     logger.error('Bulk delete sessions error:', error.message);
-    res.status(400).json({ success: false, error: error.message || 'Failed to delete sessions' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to delete sessions' });
   }
 });
 

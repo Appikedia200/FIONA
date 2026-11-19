@@ -50,25 +50,17 @@ export default function AdminProfilesPage() {
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [showPassword, setShowPassword] = useState<{[key: string]: boolean}>({});
 
-  // Build query params based on domain tab
-  const queryParams = new URLSearchParams();
-  if (domainTab === 'GSUITE') {
-    queryParams.set('type', 'GOOGLE');
-  } else if (domainTab === 'GMAIL') {
-    queryParams.set('search', '@gmail.com');
-  }
-
-  const swrKey = `/api/admin/profiles?${queryParams.toString()}`;
+  // Always fetch all profiles — filter client-side so counts are consistent
+  const swrKey = `/api/admin/profiles`;
   const { data, error, isLoading } = useSWR<ProfilesResponse>(swrKey, fetcher);
 
   const profiles = data?.profiles || [];
   const total = data?.total || 0;
   const authenticatedCount = data?.authenticated || 0;
   const launchedCount = data?.activeSessions || 0;
-  const gsuiteCount = data?.gsuiteCount || 0;
+  const gsuiteCount = profiles.filter(p => !isGmailAddress(p.email)).length;
 
-  // Calculate Gmail count client-side
-  const gmailCount = profiles.filter(p => p.accountType === 'GMAIL').length;
+  const gmailCount = profiles.filter(p => isGmailAddress(p.email)).length;
 
   const handleLaunch = async (id: string) => {
     setActionLoading(id);
@@ -161,13 +153,12 @@ export default function AdminProfilesPage() {
     toast.success(`${label} copied`);
   };
 
-  // Domain filtering - use accountType consistently
+  const isGmailAddress = (email: string) =>
+    email.toLowerCase().endsWith('@gmail.com') || email.toLowerCase().endsWith('@googlemail.com');
+
   const filteredProfiles = profiles.filter(profile => {
-    if (domainTab === 'GSUITE') {
-      return profile.accountType === 'GSUITE';
-    } else if (domainTab === 'GMAIL') {
-      return profile.accountType === 'GMAIL';
-    }
+    if (domainTab === 'GSUITE') return !isGmailAddress(profile.email);
+    if (domainTab === 'GMAIL') return isGmailAddress(profile.email);
     return true;
   });
 
@@ -331,24 +322,14 @@ export default function AdminProfilesPage() {
                     <div className="text-xs text-white/50 font-mono">{profile.campaignId.substring(0, 8)}</div>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    {profile.status === 'AUTHENTICATED' || profile.authStatus === 'AUTHENTICATED' ? (
+                    {profile.authStatus === 'AUTHENTICATED' ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20 text-xs font-medium">
                         <Check className="w-3 h-3" />
                         Authenticated
                       </span>
-                    ) : profile.status === 'PASSWORD_ENTERED' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#F97316]/10 text-[#F97316] border border-[#F97316]/20 text-xs font-medium">
-                        <Key className="w-3 h-3" />
-                        Credentials Captured
-                      </span>
-                    ) : profile.status === 'EMAIL_ENTERED' ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20 text-xs font-medium">
-                        <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse"></div>
-                        Authenticating
-                      </span>
                     ) : (
-                      <span className="px-2.5 py-1 rounded-full bg-white/10 text-white/50 text-xs font-medium">
-                        Pending
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]/20 text-xs font-medium">
+                        Not Authenticated
                       </span>
                     )}
                   </td>
