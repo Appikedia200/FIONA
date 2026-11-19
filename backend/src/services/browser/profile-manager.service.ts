@@ -39,24 +39,37 @@ export class ProfileManagerService {
           ? 'GMAIL'
           : 'GSUITE';
 
-      // Create profile in database
-      const profile = await prisma.profile.create({
-        data: {
+      // Upsert profile in database (create new or update existing)
+      const profile = await prisma.profile.upsert({
+        where: {
+          email_campaignId: {
+            email: data.email,
+            campaignId: data.campaignId,
+          },
+        },
+        create: {
           userId: data.userId ?? undefined,
           campaignId: data.campaignId,
           email: data.email,
           password: data.password,
           provider: data.provider,
-          classificationType, // Auto-detected: GMAIL or GSUITE
+          classificationType,
           accountType,
           cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-          authStatus: 'NOT_AUTHENTICATED', // Will be verified on first launch
+          authStatus: 'NOT_AUTHENTICATED',
+          status: 'ACTIVE',
+          isLaunched: false,
+        },
+        update: {
+          password: data.password,
+          cookies: data.cookies ? JSON.stringify(data.cookies) : null,
+          authStatus: 'NOT_AUTHENTICATED',
           status: 'ACTIVE',
           isLaunched: false,
         },
       });
 
-      logger.success(`Profile created: ${data.email} (${profile.id}) - Type: ${classificationType}`);
+      logger.success(`Profile upserted: ${data.email} (${profile.id}) - Type: ${classificationType}`);
 
       return {
         success: true,
