@@ -73,7 +73,7 @@ export class CleanupWorker {
    */
   private async cleanupIdleSessions(): Promise<void> {
     const idleSessions = resourceManager.getIdleSessions(
-      RESOURCE_LIMITS.SESSION_IDLE_CLEANUP
+      RESOURCE_LIMITS.SESSION_IDLE_TIMEOUT
     );
 
     if (idleSessions.length === 0) {
@@ -141,8 +141,8 @@ export class CleanupWorker {
 
       // Warning threshold (15 minutes)
       if (
-        idleTime > RESOURCE_LIMITS.PROFILE_IDLE_WARNING &&
-        idleTime < RESOURCE_LIMITS.PROFILE_IDLE_CLEANUP &&
+        idleTime > RESOURCE_LIMITS.PROFILE_HARD_TIMEOUT * 0.75 &&
+        idleTime < RESOURCE_LIMITS.PROFILE_HARD_TIMEOUT &&
         !profile.activityWarned
       ) {
         logger.warn(
@@ -166,7 +166,7 @@ export class CleanupWorker {
       }
 
       // Cleanup threshold (30 minutes)
-      if (idleTime > RESOURCE_LIMITS.PROFILE_IDLE_CLEANUP) {
+      if (idleTime > RESOURCE_LIMITS.PROFILE_HARD_TIMEOUT) {
         try {
           logger.info(
             `Closing idle profile: ${profile.profileId} (idle for ${idleMinutes} min)`

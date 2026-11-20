@@ -320,7 +320,8 @@ router.delete('/', async (req: Request, res: Response) => {
       res.status(400).json({ success: false, error: 'ids array required' });
       return;
     }
-    const result = await monitoringService.deleteProfiles(ids);
+    const results = await Promise.all(ids.map((id: string) => monitoringService.deleteProfile(id)));
+    const result = { count: results.length };
     res.status(200).json(result);
   } catch (error: any) {
     logger.error('Bulk delete profiles error:', error.message);

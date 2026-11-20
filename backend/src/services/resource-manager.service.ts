@@ -270,7 +270,7 @@ export class ResourceManagerService {
   /**
    * Get idle sessions (for cleanup)
    */
-  getIdleSessions(idleThresholdMs: number = RESOURCE_LIMITS.SESSION_IDLE_CLEANUP): SessionContext[] {
+  getIdleSessions(idleThresholdMs: number = RESOURCE_LIMITS.SESSION_IDLE_TIMEOUT): SessionContext[] {
     const now = Date.now();
     return Array.from(activeSessions.values()).filter(session => {
       const idleTime = now - session.lastActivity.getTime();
@@ -281,7 +281,7 @@ export class ResourceManagerService {
   /**
    * Get idle profiles (for cleanup)
    */
-  getIdleProfiles(idleThresholdMs: number = RESOURCE_LIMITS.PROFILE_IDLE_CLEANUP): LaunchedProfileContext[] {
+  getIdleProfiles(idleThresholdMs: number = RESOURCE_LIMITS.PROFILE_HARD_TIMEOUT): LaunchedProfileContext[] {
     const now = Date.now();
     return Array.from(launchedProfiles.values()).filter(profile => {
       const idleTime = now - profile.lastInteraction.getTime();
@@ -315,8 +315,8 @@ export class ResourceManagerService {
       cpu,
       sessions: {
         active: activeSessions.size,
-        max: RESOURCE_LIMITS.MAX_CONCURRENT_SESSIONS,
-        percentage: ((activeSessions.size / RESOURCE_LIMITS.MAX_CONCURRENT_SESSIONS) * 100).toFixed(2),
+        max: null,
+        percentage: null,
         canStartNew: this.canStartNewSession(),
       },
       profiles: {
