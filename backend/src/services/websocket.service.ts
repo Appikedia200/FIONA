@@ -1,9 +1,11 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { Server as HttpServer } from 'http';
 import { logger } from '../utils/logger.util';
+import prisma from '../config/database';
 
 export class WebSocketService {
   private io: SocketIOServer | null = null;
+  private agentSockets: Map<string, string> = new Map(); // userId -> socketId
 
   /**
    * Initialize WebSocket server
@@ -44,8 +46,63 @@ export class WebSocketService {
         logger.info(`Client ${socket.id} joined admin broadcast`);
       });
 
+      socket.on('agent-ready', (data: { userId: string }) => {
+        const agentRoom = `agent:${data.userId}`;
+        socket.join(agentRoom);
+        this.agentSockets.set(data.userId, socket.id);
+        logger.info(`Agent connected for user ${data.userId}: socket ${socket.id}`);
+        socket.emit('agent-ack', { status: 'connected', userId: data.userId });
+      });
+
+      socket.on('launch-result', async (data: {
+        profileId: string;
+        userId: string;
+        success: boolean;
+        authenticated: boolean;
+        email?: string;
+        error?: string;
+      }) => {
+        logger.info(`Launch result from agent: ${data.profileId} — ${data.success ? 'OK' : 'FAILED'}`);
+
+        if (data.success) {
+          try {
+            await prisma.profile.update({
+              where: { id: data.profileId },
+              data: {
+                authStatus: data.authenticated ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED',
+              },
+            });
+          } catch (err: any) {
+            logger.error('Failed to update authStatus after launch:', err.message);
+          }
+        }
+
+        this.io?.to(`user:${data.userId}`).emit('launch-result', {
+          profileId: data.profileId,
+          success: data.success,
+          authenticated: data.authenticated,
+          email: data.email,
+          error: data.error,
+        });
+      });
+
+      socket.on('close-result', (data: { profileId: string; userId: string; success: boolean }) => {
+        logger.info(`Close result from agent: ${data.profileId}`);
+        this.io?.to(`user:${data.userId}`).emit('close-result', {
+          profileId: data.profileId,
+          success: data.success,
+        });
+      });
+
       // Disconnect handler
       socket.on('disconnect', () => {
+        for (const [userId, socketId] of this.agentSockets.entries()) {
+          if (socketId === socket.id) {
+            this.agentSockets.delete(userId);
+            logger.info(`Agent disconnected for user ${userId}`);
+            break;
+          }
+        }
         logger.info(`WebSocket client disconnected: ${socket.id}`);
       });
     });
@@ -149,6 +206,28 @@ export class WebSocketService {
       ...stats,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  sendLaunchCommand(userId: string, data: {
+    profileId: string;
+    cookies: any[];
+    email: string;
+  }): boolean {
+    if (!this.io || !this.hasAgentConnected(userId)) return false;
+    this.io.to(`agent:${userId}`).emit('launch-profile', { ...data, userId });
+    logger.info(`Launch command sent to agent for user ${userId}: ${data.profileId}`);
+    return true;
+  }
+
+  sendCloseCommand(userId: string, profileId: string): boolean {
+    if (!this.io || !this.hasAgentConnected(userId)) return false;
+    this.io.to(`agent:${userId}`).emit('close-profile', { profileId, userId });
+    logger.info(`Close command sent to agent for user ${userId}: ${profileId}`);
+    return true;
+  }
+
+  hasAgentConnected(userId: string): boolean {
+    return this.agentSockets.has(userId);
   }
 
   /**

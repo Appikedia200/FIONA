@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import useSWR, { mutate } from 'swr';
 import apiClient from '@/lib/api-client';
 import { Database, Play, X, Key, Eye, EyeOff, Check, ShieldCheck, Copy, Trash2, Monitor, UserCheck, ArrowLeft } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
+import wsClient from '@/lib/websocket-client';
 
 interface Profile {
   id: string;
@@ -49,6 +50,8 @@ export default function AdminProfilesPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [showPassword, setShowPassword] = useState<{[key: string]: boolean}>({});
+  const [locallyLaunched, setLocallyLaunched] = useState<Set<string>>(new Set());
+  const [launchPending, setLaunchPending] = useState<Set<string>>(new Set());
 
   // Helper to identify Gmail addresses
   const isGmailAddress = (email: string) =>
@@ -66,48 +69,66 @@ export default function AdminProfilesPage() {
 
   const gmailCount = profiles.filter(p => isGmailAddress(p.email)).length;
 
+  useEffect(() => {
+    const handleLaunchResult = (data: {
+      profileId: string;
+      success: boolean;
+      authenticated: boolean;
+      email?: string;
+      error?: string;
+    }) => {
+      setLaunchPending(prev => { const s = new Set(prev); s.delete(data.profileId); return s; });
+      if (data.success) {
+        setLocallyLaunched(prev => new Set(prev).add(data.profileId));
+        toast.success(
+          `${data.email || 'Profile'} launched on your PC${data.authenticated ? ' — authenticated ✓' : ''}`
+        );
+      } else {
+        toast.error(`Launch failed: ${data.error || 'Unknown error'}`);
+      }
+      mutate(swrKey);
+    };
+
+    const handleCloseResult = (data: { profileId: string; success: boolean }) => {
+      setLocallyLaunched(prev => { const s = new Set(prev); s.delete(data.profileId); return s; });
+      mutate(swrKey);
+    };
+
+    wsClient.onLaunchResult(handleLaunchResult);
+    wsClient.onCloseResult(handleCloseResult);
+
+    return () => {
+      wsClient.offLaunchResult(handleLaunchResult);
+      wsClient.offCloseResult(handleCloseResult);
+    };
+  }, [swrKey]);
+
   const handleLaunch = async (id: string) => {
+    const profile = profiles.find(p => p.id === id);
+    if (profile && profile.authStatus !== 'AUTHENTICATED') {
+      toast.error('Profile not authenticated yet — wait for the visitor to complete login');
+      return;
+    }
+
     setActionLoading(id);
+    setLaunchPending(prev => new Set(prev).add(id));
     try {
       const response = await apiClient.post(`/api/admin/profiles/${id}/launch`);
-      const launchData = response.data.profile;
-
-      // Try to send cookies to local FIONA Agent (ws://localhost:7474)
-      try {
-        await new Promise<void>((resolve, reject) => {
-          let ws: WebSocket;
-          try { ws = new WebSocket('ws://localhost:7474'); }
-          catch { return reject(new Error('unavailable')); }
-
-          const timer = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 5000);
-
-          ws.onopen = () => ws.send(JSON.stringify({
-            type: 'LAUNCH_PROFILE',
-            profileId: launchData.id,
-            email: launchData.email,
-            cookies: launchData.cookies,
-            accountType: launchData.accountType,
-          }));
-
-          ws.onmessage = (e) => {
-            clearTimeout(timer);
-            const msg = JSON.parse(e.data);
-            ws.close();
-            msg.type === 'LAUNCHED' ? resolve() : reject(new Error(msg.message));
-          };
-
-          ws.onerror = () => { clearTimeout(timer); reject(new Error('unavailable')); };
-        });
-
-        toast.success(`Browser launched for ${launchData.email}`);
-      } catch {
-        // Agent not running — profile is still marked launched in DB
-        toast.info('Profile marked launched. Open FIONA Desktop to view the browser.', { duration: 6000 });
+      if (response.data.pending) {
+        toast.info('Launch command sent — browser opening on your PC...');
+        mutate(swrKey);
+      } else {
+        toast.success('Profile launched');
+        mutate(swrKey);
       }
-
-      mutate(swrKey);
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to launch profile');
+      setLaunchPending(prev => { const s = new Set(prev); s.delete(id); return s; });
+      const errorData = error.response?.data;
+      if (errorData?.requiresAgent) {
+        toast.error('Agent not running. Start the FIONA agent on your PC first.');
+      } else {
+        toast.error(errorData?.error || 'Failed to launch profile');
+      }
     } finally {
       setActionLoading(null);
     }
@@ -117,7 +138,8 @@ export default function AdminProfilesPage() {
     setActionLoading(id);
     try {
       await apiClient.post(`/api/admin/profiles/${id}/close`);
-      toast.success('Profile session closed');
+      toast.success('Close command sent to agent');
+      setLocallyLaunched(prev => { const s = new Set(prev); s.delete(id); return s; });
       mutate(swrKey);
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to close profile');
@@ -158,8 +180,13 @@ export default function AdminProfilesPage() {
   };
 
   const filteredProfiles = profiles.filter(profile => {
-    if (domainTab === 'GSUITE') return !isGmailAddress(profile.email);
-    if (domainTab === 'GMAIL') return isGmailAddress(profile.email);
+    const emailLower = profile.email.toLowerCase();
+    const isGmail = emailLower.endsWith('@gmail.com') || emailLower.endsWith('@googlemail.com');
+    if (domainTab === 'GSUITE') {
+      return profile.accountType === 'GSUITE' || !isGmail;
+    } else if (domainTab === 'GMAIL') {
+      return profile.accountType === 'GMAIL' || isGmail;
+    }
     return true;
   });
 
@@ -361,23 +388,35 @@ export default function AdminProfilesPage() {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-end gap-2">
-                      {profile.isLaunched ? (
+                      {locallyLaunched.has(profile.id) ? (
                         <button
                           onClick={() => handleClose(profile.id)}
                           disabled={actionLoading === profile.id}
                           className="p-2 hover:bg-[#EF4444]/20 rounded-lg transition-colors"
-                          title="Close"
+                          title="Close session on your PC"
                         >
                           <X className="h-4 w-4 text-[#EF4444]" />
                         </button>
-                      ) : profile.authStatus === 'AUTHENTICATED' ? (
+                      ) : (profile.cookies && profile.cookies.length > 0) ? (
                         <button
                           onClick={() => handleLaunch(profile.id)}
-                          disabled={actionLoading === profile.id || launchedCount >= 5}
+                          disabled={actionLoading === profile.id || launchPending.has(profile.id)}
                           className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
-                          title="Launch"
+                          title={
+                            profile.authStatus !== 'AUTHENTICATED'
+                              ? 'Not authenticated yet'
+                              : launchPending.has(profile.id)
+                              ? 'Opening on your PC...'
+                              : 'Launch on your PC'
+                          }
                         >
-                          <Monitor className="h-4 w-4 text-white/70" />
+                          <Monitor className={`h-4 w-4 ${
+                            profile.authStatus !== 'AUTHENTICATED'
+                              ? 'text-white/30'
+                              : launchPending.has(profile.id)
+                              ? 'text-[#4F7FFF] animate-pulse'
+                              : 'text-white/70'
+                          }`} />
                         </button>
                       ) : null}
                       <button

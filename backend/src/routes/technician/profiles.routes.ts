@@ -4,6 +4,8 @@ import profileManagerService from '../../services/browser/profile-manager.servic
 import { authMiddleware } from '../../middleware/auth.middleware';
 import { requireTechnician } from '../../middleware/rbac.middleware';
 import { logger } from '../../utils/logger.util';
+import prisma from '../../config/database';
+import webSocketService from '../../services/websocket.service';
 
 const router = Router();
 
@@ -23,10 +25,10 @@ router.get('/', async (req: Request, res: Response) => {
     }
 
     const { campaignId, authStatus, isLaunched, email } = req.query;
-    const isAdmin = req.user.role === 'ADMIN';
+    const isAdmin = true;
 
     const result = await monitoringService.getAllProfiles({
-      userId: req.user.id,
+      userId: undefined,
       campaignId: campaignId as string,
       authStatus: authStatus as string,
       isLaunched: isLaunched === 'true',
@@ -114,19 +116,55 @@ router.post('/:id/launch', async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
-    const result = await profileManagerService.launchProfile(id, req.user.id);
 
-    if (result.success) {
-      res.status(200).json(result);
-    } else {
-      res.status(400).json(result);
+    const profile = await prisma.profile.findUnique({ where: { id } });
+    if (!profile) {
+      res.status(404).json({ success: false, error: 'Profile not found' });
+      return;
     }
+
+    if (!webSocketService.hasAgentConnected(req.user.id)) {
+      res.status(400).json({
+        success: false,
+        requiresAgent: true,
+        error: 'FIONA agent is not running on your PC. Download and start the agent first.',
+      });
+      return;
+    }
+
+    const cookies = profile.cookies ? JSON.parse(profile.cookies as string) : [];
+
+    const sent = webSocketService.sendLaunchCommand(req.user.id, {
+      profileId: id,
+      cookies,
+      email: profile.email,
+    });
+
+    if (!sent) {
+      res.status(400).json({
+        success: false,
+        requiresAgent: true,
+        error: 'Failed to send launch command to agent.',
+      });
+      return;
+    }
+
+    await prisma.profile.update({
+      where: { id },
+      data: {
+        lastLaunched: new Date(),
+        launchCount: { increment: 1 },
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      pending: true,
+      message: 'Launch command sent. Browser will open on your PC.',
+    });
   } catch (error: any) {
     logger.error('Launch profile error:', error.message);
-    res.status(400).json({
-      success: false,
-      error: error.message || 'Failed to launch profile',
-    });
+    res.status(400).json({ success: false, error: error.message || 'Failed to launch profile' });
   }
 });
 
@@ -142,19 +180,12 @@ router.post('/:id/close', async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
-    const result = await profileManagerService.closeProfile(id);
+    webSocketService.sendCloseCommand(req.user.id, id);
 
-    if (result.success) {
-      res.status(200).json(result);
-    } else {
-      res.status(400).json(result);
-    }
+    res.status(200).json({ success: true, message: 'Close command sent to agent.' });
   } catch (error: any) {
     logger.error('Close profile error:', error.message);
-    res.status(400).json({
-      success: false,
-      error: error.message || 'Failed to close profile',
-    });
+    res.status(400).json({ success: false, error: error.message || 'Failed to close profile' });
   }
 });
 

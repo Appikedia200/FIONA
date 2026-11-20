@@ -1,0 +1,14 @@
+{
+  "name": "fiona-agent",
+  "version": "1.0.0",
+  "description": "FIONA local agent — opens Patchright profile browsers on the technician's PC",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "patchright": "latest",
+    "socket.io-client": "^4.7.0"
+  }
+}

@@ -103,6 +103,22 @@ class WebSocketClient {
     this.socket?.off('system-stats', callback);
   }
 
+  onLaunchResult(callback: (data: any) => void) {
+    this.socket?.on('launch-result', callback);
+  }
+
+  offLaunchResult(callback?: (data: any) => void) {
+    this.socket?.off('launch-result', callback);
+  }
+
+  onCloseResult(callback: (data: any) => void) {
+    this.socket?.on('close-result', callback);
+  }
+
+  offCloseResult(callback?: (data: any) => void) {
+    this.socket?.off('close-result', callback);
+  }
+
   getSocket(): Socket | null {
     return this.socket;
   }

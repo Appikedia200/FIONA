@@ -310,7 +310,6 @@ model Profile {
   campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   user             User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([email, campaignId])
   @@index([authStatus])
   @@index([status])
   @@index([provider])

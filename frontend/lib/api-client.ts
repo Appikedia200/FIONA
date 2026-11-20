@@ -94,6 +94,8 @@ class ApiClient {
     provider: string;
     description?: string;
     targetUrl?: string;
+    domainId?: string;
+    profileId?: string;
   }) {
     return this.client.post('/api/campaigns', data);
   }
