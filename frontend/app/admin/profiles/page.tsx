@@ -356,7 +356,7 @@ export default function AdminProfilesPage() {
                         Authenticated
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]/20 text-xs font-medium">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 text-white/40 border border-white/10 text-xs font-medium">
                         Not Authenticated
                       </span>
                     )}

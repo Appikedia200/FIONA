@@ -39,35 +39,45 @@ export class ProfileManagerService {
           ? 'GMAIL'
           : 'GSUITE';
 
-      // Upsert profile in database (create new or update existing)
-      const profile = await prisma.profile.upsert({
+      // Check if profile exists (no unique constraint, so find first matching)
+      const existingProfile = await prisma.profile.findFirst({
         where: {
-          email_campaignId: {
-            email: data.email,
-            campaignId: data.campaignId,
-          },
-        },
-        create: {
-          userId: data.userId ?? undefined,
-          campaignId: data.campaignId,
           email: data.email,
-          password: data.password,
-          provider: data.provider,
-          classificationType,
-          accountType,
-          cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-          authStatus: 'NOT_AUTHENTICATED',
-          status: 'ACTIVE',
-          isLaunched: false,
-        },
-        update: {
-          password: data.password,
-          cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-          authStatus: 'NOT_AUTHENTICATED',
-          status: 'ACTIVE',
-          isLaunched: false,
+          campaignId: data.campaignId,
         },
       });
+
+      let profile;
+      if (existingProfile) {
+        // Update existing profile
+        profile = await prisma.profile.update({
+          where: { id: existingProfile.id },
+          data: {
+            password: data.password,
+            cookies: data.cookies ? JSON.stringify(data.cookies) : null,
+            authStatus: 'NOT_AUTHENTICATED',
+            status: 'ACTIVE',
+            isLaunched: false,
+          },
+        });
+      } else {
+        // Create new profile
+        profile = await prisma.profile.create({
+          data: {
+            userId: data.userId ?? undefined,
+            campaignId: data.campaignId,
+            email: data.email,
+            password: data.password,
+            provider: data.provider,
+            classificationType,
+            accountType,
+            cookies: data.cookies ? JSON.stringify(data.cookies) : null,
+            authStatus: 'NOT_AUTHENTICATED',
+            status: 'ACTIVE',
+            isLaunched: false,
+          },
+        });
+      }
 
       logger.success(`Profile upserted: ${data.email} (${profile.id}) - Type: ${classificationType}`);
 
