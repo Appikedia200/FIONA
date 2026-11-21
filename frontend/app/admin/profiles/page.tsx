@@ -407,28 +407,19 @@ export default function AdminProfilesPage() {
                       ) : (
                         <button
                           onClick={() => handleLaunch(profile.id)}
-                          disabled={
-                            actionLoading === profile.id || 
-                            launchPending.has(profile.id) ||
-                            !profile.cookies ||
-                            profile.cookies.length === 0
-                          }
-                          className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-30"
+                          disabled={actionLoading === profile.id || launchPending.has(profile.id)}
+                          className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
                           title={
-                            !profile.cookies || profile.cookies.length === 0
-                              ? 'No cookies captured yet'
-                              : profile.authStatus !== 'AUTHENTICATED'
-                              ? 'Not authenticated yet'
+                            profile.authStatus !== 'AUTHENTICATED'
+                              ? 'Not authenticated yet - click to see details'
                               : launchPending.has(profile.id)
                               ? 'Opening on your PC...'
                               : 'Launch on your PC'
                           }
                         >
                           <Monitor className={`h-4 w-4 ${
-                            !profile.cookies || profile.cookies.length === 0
-                              ? 'text-white/20'
-                              : profile.authStatus !== 'AUTHENTICATED'
-                              ? 'text-white/30'
+                            profile.authStatus !== 'AUTHENTICATED'
+                              ? 'text-white/40'
                               : launchPending.has(profile.id)
                               ? 'text-[#4F7FFF] animate-pulse'
                               : 'text-white/70'

@@ -47,6 +47,9 @@ export class ProfileManagerService {
         },
       });
 
+      // Determine auth status based on cookies
+      const authStatus = (data.cookies && data.cookies.length > 0) ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED';
+
       let profile;
       if (existingProfile) {
         // Update existing profile
@@ -55,7 +58,7 @@ export class ProfileManagerService {
           data: {
             password: data.password,
             cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-            authStatus: 'NOT_AUTHENTICATED',
+            authStatus,
             status: 'ACTIVE',
             isLaunched: false,
           },
@@ -72,7 +75,7 @@ export class ProfileManagerService {
             classificationType,
             accountType,
             cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-            authStatus: 'NOT_AUTHENTICATED',
+            authStatus,
             status: 'ACTIVE',
             isLaunched: false,
           },

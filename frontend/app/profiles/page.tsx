@@ -523,36 +523,25 @@ export default function ProfilesPage() {
                   <>
                     <button
                       onClick={() => handleLaunch(profile.id)}
-                      disabled={
-                        actionLoading === profile.id || 
-                        launchPending.has(profile.id) ||
-                        !profile.cookies ||
-                        profile.cookies.length === 0
-                      }
+                      disabled={actionLoading === profile.id || launchPending.has(profile.id)}
                       style={{
                         flex: 1,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
                         padding: '8px 16px',
-                        backgroundColor: (!profile.cookies || profile.cookies.length === 0)
-                          ? 'rgba(255,255,255,0.03)'
-                          : profile.authStatus !== 'AUTHENTICATED'
+                        backgroundColor: profile.authStatus !== 'AUTHENTICATED'
                           ? 'rgba(255,255,255,0.05)'
                           : launchPending.has(profile.id)
                           ? 'rgba(79,127,255,0.3)'
                           : '#4F7FFF',
-                        color: (!profile.cookies || profile.cookies.length === 0)
-                          ? 'rgba(226,232,240,0.2)'
-                          : profile.authStatus !== 'AUTHENTICATED' ? 'rgba(226,232,240,0.4)' : '#E2E8F0',
+                        color: profile.authStatus !== 'AUTHENTICATED' ? 'rgba(226,232,240,0.4)' : '#E2E8F0',
                         borderRadius: '8px', fontSize: '14px', fontWeight: 500,
                         opacity: (actionLoading === profile.id || launchPending.has(profile.id)) ? 0.7 : 1,
-                        cursor: (!profile.cookies || profile.cookies.length === 0) ? 'not-allowed' : 'pointer',
+                        cursor: 'pointer',
                         border: 'none',
                       }}
                       title={
-                        (!profile.cookies || profile.cookies.length === 0)
-                          ? 'No cookies captured yet'
-                          : profile.authStatus !== 'AUTHENTICATED'
-                          ? 'Not authenticated yet'
+                        profile.authStatus !== 'AUTHENTICATED'
+                          ? 'Not authenticated yet - click to see details'
                           : launchPending.has(profile.id)
                           ? 'Opening on your PC...'
                           : 'Launch on your PC'
