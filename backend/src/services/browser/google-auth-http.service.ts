@@ -495,6 +495,8 @@ class GoogleAuthHTTPService {
             } catch { dpNumber = ''; }
           }
 
+          logger.warn(`[DP] Device Protection triggered — session ${sessionId}, waiting for phone approval`);
+
           return {
             success: true,
             stage: '2fa',
@@ -569,7 +571,10 @@ class GoogleAuthHTTPService {
 
     try {
       const url = session.page.url();
+      logger.info(`[DP-POLL] session ${sessionId} — URL: ${url}`);
+      
       if (!url.includes('challenge/dp')) {
+        logger.success(`[DP] Phone approved — session ${sessionId}, extracting cookies now`);
         return { status: 'AUTHENTICATED' };
       }
       return { status: 'PENDING' };
@@ -902,8 +907,8 @@ class GoogleAuthHTTPService {
       .filter(c =>
         c.domain &&
         c.domain.includes('google.com') &&
-        c.session !== true &&
-        c.expirationDate &&
+        c.expires !== undefined &&
+        c.expires > 0 &&
         KEY_AUTH_COOKIES.has(c.name)
       )
       .map(c => ({
@@ -911,7 +916,7 @@ class GoogleAuthHTTPService {
         value:          c.value,
         domain:         c.domain,
         path:           c.path || '/',
-        expirationDate: c.expirationDate,
+        expirationDate: c.expires,
         secure:         c.secure,
         httpOnly:       c.httpOnly,
         sameSite:       c.sameSite,
