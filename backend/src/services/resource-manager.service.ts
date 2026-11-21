@@ -1,6 +1,7 @@
 import { Browser, Page, BrowserContext } from 'patchright';
 import { RESOURCE_LIMITS } from '../config/resources';
 import { logger } from '../utils/logger.util';
+import * as fs from 'fs';
 
 // Session context stored in memory
 export interface SessionContext {
@@ -38,16 +39,37 @@ const SESSION_INACTIVITY_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 export class ResourceManagerService {
   /**
-   * Get current memory usage
+   * Get accurate system memory ratio (Linux-aware)
+   * Reads /proc/meminfo to get MemAvailable which includes reclaimable cache
+   */
+  private getMemoryRatio(): number {
+    try {
+      const meminfo = fs.readFileSync('/proc/meminfo', 'utf8');
+      const totalMatch = meminfo.match(/MemTotal:\s+(\d+)\s+kB/);
+      const availMatch = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/);
+      if (totalMatch && availMatch) {
+        const totalKb = parseInt(totalMatch[1], 10);
+        const availKb = parseInt(availMatch[1], 10);
+        return (totalKb - availKb) / totalKb;
+      }
+    } catch {}
+    // fallback: Node os.freemem() — inaccurate on Linux but better than crashing
+    const usage = process.memoryUsage();
+    return usage.heapUsed / usage.heapTotal;
+  }
+
+  /**
+   * Get current memory usage (system RAM, not just Node heap)
    */
   getMemoryUsage() {
     const usage = process.memoryUsage();
+    const systemMemRatio = this.getMemoryRatio();
     return {
       heapUsed: Math.round(usage.heapUsed / 1024 / 1024), // MB
       heapTotal: Math.round(usage.heapTotal / 1024 / 1024), // MB
       external: Math.round(usage.external / 1024 / 1024), // MB
       rss: Math.round(usage.rss / 1024 / 1024), // MB (total memory)
-      percentage: ((usage.heapUsed / usage.heapTotal) * 100).toFixed(2),
+      percentage: (systemMemRatio * 100).toFixed(2), // System RAM percentage (accurate on Linux)
     };
   }
 
@@ -67,12 +89,11 @@ export class ResourceManagerService {
    * NOTE: No hard capacity limit - inactivity-based cleanup ensures we never run out
    */
   canStartNewSession(): boolean {
-    const memUsage = process.memoryUsage();
-    const memPercentage = memUsage.heapUsed / memUsage.heapTotal;
+    const memUsage = this.getMemoryRatio();
 
     // Only check memory threshold (no hard session count limit)
-    if (memPercentage >= RESOURCE_LIMITS.MEMORY_THRESHOLD) {
-      logger.warn(`Cannot start new session: memory threshold exceeded (${(memPercentage * 100).toFixed(2)}%)`);
+    if (memUsage >= RESOURCE_LIMITS.MEMORY_THRESHOLD) {
+      logger.warn(`Cannot start new session: memory threshold exceeded (${(memUsage * 100).toFixed(2)}%)`);
       return false;
     }
 
