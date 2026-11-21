@@ -230,16 +230,8 @@ export class CleanupWorker {
       });
     }
 
-    // Check session capacity
-    const sessionPercentage = parseFloat(stats.sessions.percentage);
-    if (sessionPercentage >= 90) {
-      websocketService.broadcastResourceWarning('capacity', {
-        message: `Session capacity at ${sessionPercentage.toFixed(0)}%`,
-        severity: sessionPercentage >= 100 ? 'critical' : 'warning',
-        metrics: stats.sessions,
-      });
-    }
-
+    // No session capacity limits in local-agent mode (max is Infinity)
+    
     // Broadcast system stats to admin
     websocketService.broadcastSystemStats(stats);
   }
