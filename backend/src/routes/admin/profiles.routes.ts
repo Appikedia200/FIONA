@@ -90,7 +90,7 @@ router.get('/', async (req: Request, res: Response) => {
       password: profile.password,
       provider: profile.provider,
       campaignId: profile.campaignId,
-      campaignName: profile.campaign.name,
+      campaignName: profile.campaign?.name ?? '—',
       accountType: profile.accountType,
       authStatus: profile.authStatus,
       status: profile.status,

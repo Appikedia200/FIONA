@@ -285,7 +285,7 @@ model CampaignProfile {
 model Profile {
   id               String    @id @default(cuid())
   userId           String?
-  campaignId       String
+  campaignId       String?
   email            String
   password         String
   provider         String    @default("GOOGLE")
@@ -307,7 +307,7 @@ model Profile {
   capturedFrom     String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
-  campaign         Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   user             User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([authStatus])

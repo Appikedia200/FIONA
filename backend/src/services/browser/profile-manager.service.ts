@@ -22,7 +22,7 @@ export class ProfileManagerService {
    */
   async createProfile(data: {
     userId: string | undefined;
-    campaignId: string;
+    campaignId?: string;
     email: string;
     password: string;
     cookies: any[];
@@ -46,7 +46,7 @@ export class ProfileManagerService {
       const profile = await prisma.profile.create({
         data: {
           userId: data.userId ?? undefined,
-          campaignId: data.campaignId,
+          campaignId: data.campaignId || undefined,
           email: data.email,
           password: data.password,
           provider: data.provider,
