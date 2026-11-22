@@ -1,0 +1,14 @@
+{
+  "name": "fiona-desktop-agent",
+  "version": "1.0.0",
+  "description": "FIONA local agent — launches captured Google sessions in Chromium",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.48.0",
+    "socket.io-client": "^4.7.5"
+  }
+}
