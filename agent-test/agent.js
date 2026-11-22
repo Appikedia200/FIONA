@@ -2,36 +2,44 @@
 require('dotenv').config();
 const { chromium } = require('playwright');
 const { io } = require('socket.io-client');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
 
 const { SERVER_URL, AGENT_EMAIL, AGENT_PASSWORD } = process.env;
 
 if (!SERVER_URL || !AGENT_EMAIL || !AGENT_PASSWORD) {
-  console.error('[FIONA] Missing .env values. Copy .env.example to .env and fill in credentials.');
+  console.error('[FIONA] Missing .env values.');
   process.exit(1);
 }
 
-// profileId → { browser, context, userId }
+// profileId → { context, userId }
 const activeBrowsers = new Map();
 
 async function launchProfile({ profileId, cookies, email, userId }) {
-  // Try system Chrome first, fall back to bundled Chromium
-  const browser = await chromium
-    .launch({ headless: false, channel: 'chrome' })
-    .catch(() => chromium.launch({ headless: false }));
+  // Isolated temp directory per profile — no cross-contamination between sessions
+  const profileDir = path.join(os.tmpdir(), 'fiona-profiles', profileId);
+  fs.mkdirSync(profileDir, { recursive: true });
 
-  const context = await browser.newContext({
+  // Always use bundled Chromium — NEVER system Chrome which has existing sessions
+  const context = await chromium.launchPersistentContext(profileDir, {
+    headless: false,
     viewport: { width: 1280, height: 800 },
+    args: ['--no-first-run', '--no-default-browser-check'],
   });
 
-  // Inject captured Google session cookies
+  // Inject captured Google session cookies into the isolated context
   if (Array.isArray(cookies) && cookies.length > 0) {
     await context.addCookies(cookies).catch((e) =>
       console.warn('[FIONA] Cookie warning:', e.message)
     );
   }
 
+  // Use the default page that launchPersistentContext creates
+  const pages = context.pages();
+  const gmailTab = pages.length > 0 ? pages[0] : await context.newPage();
+
   // Tab 1 — Gmail inbox
-  const gmailTab = await context.newPage();
   await gmailTab.goto('https://mail.google.com', {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
@@ -44,7 +52,6 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     timeout: 30000,
   });
 
-  // Keep Gmail tab in front
   await gmailTab.bringToFront();
   await gmailTab.waitForTimeout(3000);
 
@@ -54,12 +61,13 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     !finalUrl.includes('/signin') &&
     !finalUrl.includes('/ServiceLogin');
 
-  activeBrowsers.set(profileId, { browser, context, userId });
+  activeBrowsers.set(profileId, { context, userId });
 
-  // Auto-cleanup when technician closes the browser window
+  // Clean up on close
   context.on('close', () => {
     activeBrowsers.delete(profileId);
-    console.log(`[FIONA] Browser closed by technician: ${profileId}`);
+    fs.rmSync(profileDir, { recursive: true, force: true });
+    console.log(`[FIONA] Browser closed: ${profileId}`);
   });
 
   console.log(`[FIONA] Launched: ${email} — authenticated: ${authenticated}`);
@@ -144,7 +152,7 @@ async function main() {
   socket.on('close-profile', async ({ profileId, userId: uid }) => {
     const entry = activeBrowsers.get(profileId);
     if (entry) {
-      await entry.browser.close().catch(() => {});
+      await entry.context.close().catch(() => {});
       activeBrowsers.delete(profileId);
       console.log(`[FIONA] Profile closed: ${profileId}`);
       socket.emit('close-result', { profileId, userId: uid, success: true });
