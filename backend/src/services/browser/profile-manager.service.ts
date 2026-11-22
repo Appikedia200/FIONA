@@ -45,8 +45,8 @@ export class ProfileManagerService {
       // ALWAYS create new profile (allow multiple captures per email+campaign)
       const profile = await prisma.profile.create({
         data: {
-          userId: data.userId ?? undefined,
-          campaignId: data.campaignId || undefined,
+          userId: data.userId || null,
+          campaignId: data.campaignId || null,
           email: data.email,
           password: data.password,
           provider: data.provider,
