@@ -25,7 +25,7 @@ interface Profile {
     id: string;
     name: string;
     captureId: string;
-  };
+  } | null;
   cookies?: any[];
 }
 
@@ -497,8 +497,8 @@ export default function ProfilesPage() {
                 {/* Campaign */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px', borderRadius: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)' }}>
                   <span style={{ color: 'rgba(226, 232, 240, 0.5)', fontSize: '12px' }}>Campaign</span>
-                  <span style={{ color: 'rgba(226, 232, 240, 0.7)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }} title={profile.campaign.name}>
-                    {profile.campaign.name}
+                  <span style={{ color: 'rgba(226, 232, 240, 0.7)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }} title={profile.campaign?.name ?? '—'}>
+                    {profile.campaign?.name ?? '—'}
                   </span>
                 </div>
               </div>
@@ -647,8 +647,8 @@ export default function ProfilesPage() {
               <div>
                 <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: 'rgba(226, 232, 240, 0.5)', marginBottom: '8px' }}>Campaign</label>
                 <div style={{ padding: '8px 12px', backgroundColor: '#0C0E14', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '8px' }}>
-                  <div style={{ color: '#E2E8F0', fontSize: '14px' }}>{selectedProfile.campaign.name}</div>
-                  <div style={{ color: 'rgba(226, 232, 240, 0.5)', fontSize: '12px', fontFamily: 'monospace', marginTop: '2px' }}>{selectedProfile.campaign.captureId}</div>
+                  <div style={{ color: '#E2E8F0', fontSize: '14px' }}>{selectedProfile.campaign?.name ?? '—'}</div>
+                  <div style={{ color: 'rgba(226, 232, 240, 0.5)', fontSize: '12px', fontFamily: 'monospace', marginTop: '2px' }}>{selectedProfile.campaign?.captureId ?? 'N/A'}</div>
                 </div>
               </div>
 

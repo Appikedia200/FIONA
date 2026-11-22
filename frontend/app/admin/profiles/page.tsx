@@ -14,8 +14,8 @@ interface Profile {
   email: string;
   password?: string;
   provider: string;
-  campaignId: string;
-  campaignName: string;
+  campaignId: string | null;
+  campaignName: string | null;
   accountType?: string;
   authStatus: 'AUTHENTICATED' | 'NOT_AUTHENTICATED';
   status: string;
@@ -353,8 +353,8 @@ export default function AdminProfilesPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="text-sm text-white">{profile.campaignName}</div>
-                    <div className="text-xs text-white/50 font-mono">{profile.campaignId.substring(0, 8)}</div>
+                    <div className="text-sm text-white">{profile.campaignName ?? '—'}</div>
+                    <div className="text-xs text-white/50 font-mono">{profile.campaignId ? profile.campaignId.substring(0, 8) : 'N/A'}</div>
                   </td>
                   <td className="px-6 py-4 text-center">
                     {profile.authStatus === 'AUTHENTICATED' ? (
@@ -573,8 +573,8 @@ export default function AdminProfilesPage() {
               <div>
                 <label className="block text-sm font-medium text-white/50 mb-2">Campaign</label>
                 <div className="px-3 py-2 bg-[#0C0E14] border border-white/10 rounded-lg">
-                  <div className="text-white text-sm">{selectedProfile.campaignName}</div>
-                  <div className="text-white/50 text-xs font-mono mt-0.5">{selectedProfile.campaignId.substring(0, 8)}</div>
+                  <div className="text-white text-sm">{selectedProfile.campaignName ?? '—'}</div>
+                  <div className="text-white/50 text-xs font-mono mt-0.5">{selectedProfile.campaignId ? selectedProfile.campaignId.substring(0, 8) : 'N/A'}</div>
                 </div>
               </div>
 
