@@ -901,26 +901,48 @@ class GoogleAuthHTTPService {
       'SIDCC', 'NID', 'AEC',
       '__Secure-OSID', 'OSID',
       'COMPASS', 'GMAIL_LF',
+      'GMAIL_AT',
+      '__Host-GMAIL_SCH', '__Host-GMAIL_SCH_GML', '__Host-GMAIL_SCH_GMN', '__Host-GMAIL_SCH_GMS',
+      '__Secure-STRP', '__Secure-BUCKET', 'SEARCH_SAMESITE',
     ]);
 
     return cookies
       .filter(c =>
         c.domain &&
         c.domain.includes('google.com') &&
-        c.expires !== undefined &&
-        c.expires > 0 &&
+        (c.expires === undefined || c.expires === -1 || c.expires > 0) &&
         KEY_AUTH_COOKIES.has(c.name)
       )
-      .map(c => ({
-        name:           c.name,
-        value:          c.value,
-        domain:         c.domain,
-        path:           c.path || '/',
-        expirationDate: c.expires,
-        secure:         c.secure,
-        httpOnly:       c.httpOnly,
-        sameSite:       c.sameSite,
-      }));
+      .map(c => {
+        function toChromeSameSite(s?: string): string {
+          if (s === 'None')   return 'no_restriction';
+          if (s === 'Strict') return 'strict';
+          if (s === 'Lax')    return 'lax';
+          return 'unspecified';
+        }
+
+        const isSession  = !c.expires || c.expires === -1;
+        const isHostOnly = c.domain ? !c.domain.startsWith('.') : true;
+
+        const cookie: Record<string, any> = {
+          name:     c.name,
+          value:    c.value,
+          domain:   c.domain,
+          path:     c.path || '/',
+          sameSite: toChromeSameSite(c.sameSite),
+          storeId:  '0',
+          hostOnly: isHostOnly,
+          httpOnly: Boolean(c.httpOnly),
+          secure:   Boolean(c.secure),
+          session:  isSession,
+        };
+
+        if (!isSession) {
+          cookie.expirationDate = c.expires;
+        }
+
+        return cookie;
+      });
   }
 }
 

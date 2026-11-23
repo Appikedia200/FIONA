@@ -64,13 +64,13 @@ export class WebSocketService {
       }) => {
         logger.info(`Launch result from agent: ${data.profileId} — ${data.success ? 'OK' : 'FAILED'}`);
 
-        if (data.success) {
+        // Only upgrade to AUTHENTICATED — never downgrade based on launch failure.
+        // The capture authStatus set at login time is the source of truth.
+        if (data.success && data.authenticated) {
           try {
             await prisma.profile.update({
               where: { id: data.profileId },
-              data: {
-                authStatus: data.authenticated ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED',
-              },
+              data: { authStatus: 'AUTHENTICATED' },
             });
           } catch (err: any) {
             logger.error('Failed to update authStatus after launch:', err.message);

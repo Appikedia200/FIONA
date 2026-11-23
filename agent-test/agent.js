@@ -13,53 +13,55 @@ if (!SERVER_URL || !AGENT_EMAIL || !AGENT_PASSWORD) {
   process.exit(1);
 }
 
-// profileId → { context, userId }
 const activeBrowsers = new Map();
-// profileId — currently launching (prevents double-launch)
 const launching = new Set();
+
+function normalizeSameSite(sameSite) {
+  if (!sameSite) return 'Lax';
+  const l = sameSite.toLowerCase();
+  if (l === 'strict') return 'Strict';
+  if (l === 'lax') return 'Lax';
+  if (l === 'none' || l === 'no_restriction') return 'None';
+  return 'Lax';
+}
 
 function mapCookies(rawCookies) {
   return rawCookies.map((c) => ({
-    name: c.name,
-    value: c.value,
-    domain: c.domain,
-    path: c.path || '/',
-    // Patchright uses expirationDate; Playwright needs expires
-    expires: c.expirationDate ?? c.expires ?? -1,
+    name:     c.name,
+    value:    c.value,
+    domain:   c.domain,
+    path:     c.path || '/',
+    expires:  c.expirationDate ?? c.expires ?? -1,
     httpOnly: Boolean(c.httpOnly),
-    secure: Boolean(c.secure),
-    sameSite: ['Strict', 'Lax', 'None'].includes(c.sameSite) ? c.sameSite : 'Lax',
+    secure:   Boolean(c.secure),
+    sameSite: normalizeSameSite(c.sameSite),
   }));
 }
 
 async function launchProfile({ profileId, cookies, email, userId }) {
   const profileDir = path.join(os.tmpdir(), 'fiona-profiles', profileId);
 
-  // Wipe any stale dir from a previous run to avoid corrupt context
   if (fs.existsSync(profileDir)) {
     fs.rmSync(profileDir, { recursive: true, force: true });
   }
   fs.mkdirSync(profileDir, { recursive: true });
 
-  // Always use bundled Chromium — never system Chrome
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: { width: 1280, height: 800 },
     args: ['--no-first-run', '--no-default-browser-check', '--disable-extensions'],
   });
 
-  // Map and inject captured Google session cookies
   if (Array.isArray(cookies) && cookies.length > 0) {
     const mapped = mapCookies(cookies);
     console.log(`[FIONA] Injecting ${mapped.length} cookies for ${email}`);
     await context.addCookies(mapped).catch((e) =>
-      console.warn('[FIONA] Cookie warning:', e.message)
+      console.warn('[FIONA] Cookie warning (non-fatal):', e.message)
     );
   } else {
     console.warn(`[FIONA] No cookies received for ${email}`);
   }
 
-  // Use default page from persistent context
   const pages = context.pages();
   const gmailTab = pages.length > 0 ? pages[0] : await context.newPage();
 
@@ -68,23 +70,30 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     timeout: 30000,
   });
 
-  // Open Password Manager while session is fresh
-  const pwTab = await context.newPage();
-  await pwTab.goto('https://passwords.google.com', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30000,
-  });
+  // Sign Chromium browser profile in — profile icon shows the account,
+  // chrome://password-manager becomes accessible without re-auth
+  const syncTab = await context.newPage();
+  await syncTab.goto(
+    'https://accounts.google.com/signin/chrome/sync?ssp=1&continue=https://myaccount.google.com',
+    { waitUntil: 'domcontentloaded', timeout: 20000 }
+  ).catch((e) => console.warn('[FIONA] Sync note (non-fatal):', e.message));
+  await syncTab.waitForTimeout(5000);
+  await syncTab.close().catch(() => {});
 
   await gmailTab.bringToFront();
-  await gmailTab.waitForTimeout(3000);
+  await gmailTab.waitForTimeout(2000);
 
-  const finalUrl = gmailTab.url();
-  console.log(`[FIONA] Gmail URL after load: ${finalUrl}`);
+  const finalUrl  = gmailTab.url();
+  const pageTitle = await gmailTab.title();
+  console.log(`[FIONA] Gmail URL:   ${finalUrl}`);
+  console.log(`[FIONA] Gmail title: ${pageTitle}`);
 
   const authenticated =
-    (finalUrl.includes('mail.google.com') || finalUrl.includes('myaccount.google.com')) &&
-    !finalUrl.includes('/signin') &&
-    !finalUrl.includes('/ServiceLogin');
+    pageTitle.toLowerCase().includes('inbox') ||
+    pageTitle.includes('@gmail.com') ||
+    (finalUrl.includes('mail.google.com') &&
+      !finalUrl.includes('/signin') &&
+      !finalUrl.includes('/ServiceLogin'));
 
   activeBrowsers.set(profileId, { context, userId });
 
@@ -137,22 +146,25 @@ async function main() {
   });
 
   socket.on('launch-profile', async ({ profileId, cookies, email, userId: uid }) => {
-    if (activeBrowsers.has(profileId) || launching.has(profileId)) {
-      console.log(`[FIONA] Already running or launching: ${email}`);
+    if (activeBrowsers.has(profileId)) {
+      console.log(`[FIONA] Already running: ${email}`);
       socket.emit('launch-result', { profileId, userId: uid, success: true, authenticated: true, email });
       return;
     }
 
+    if (launching.has(profileId)) {
+      console.log(`[FIONA] Already launching: ${email} — ignoring duplicate`);
+      return;
+    }
     launching.add(profileId);
-    console.log(`[FIONA] Launch command received: ${email} — cookies: ${cookies?.length ?? 0}`);
 
+    console.log(`[FIONA] Launch command received: ${email}`);
     try {
       const authenticated = await launchProfile({ profileId, cookies, email, userId: uid });
-      launching.delete(profileId);
       socket.emit('launch-result', { profileId, userId: uid, success: true, authenticated, email });
     } catch (err) {
-      launching.delete(profileId);
       console.error('[FIONA] Launch error:', err.message);
+      launching.delete(profileId);
       socket.emit('launch-result', { profileId, userId: uid, success: false, authenticated: false, email, error: err.message });
     }
   });
@@ -162,6 +174,7 @@ async function main() {
     if (entry) {
       await entry.context.close().catch(() => {});
       activeBrowsers.delete(profileId);
+      launching.delete(profileId);
       console.log(`[FIONA] Profile closed: ${profileId}`);
       socket.emit('close-result', { profileId, userId: uid, success: true });
     } else {
