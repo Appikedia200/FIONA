@@ -1,6 +1,6 @@
 'use strict';
 require('dotenv').config();
-const { chromium } = require('playwright');
+const { chromium } = require('patchright');
 const { io } = require('socket.io-client');
 const os = require('os');
 const path = require('path');
@@ -78,15 +78,14 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     { waitUntil: 'domcontentloaded', timeout: 20000 }
   ).catch((e) => console.warn('[FIONA] Sync note (non-fatal):', e.message));
 
-  // Wait for the approval button to render, then click it.
-  // Google uses different button text across UI versions — try all variants.
+  // Click the approval button — Google shows "Yes, I'm in" or "Yes" on this page
   await syncTab.waitForTimeout(2000);
   for (const sel of [
     'button:has-text("Yes, I\'m in")',
     'button:has-text("Yes")',
     'button:has-text("Continue")',
     '#yesButton',
-    '[data-primary-action-label]',
+    'div[jsname="Njthtb"]',
     'input[type="submit"]',
   ]) {
     const clicked = await syncTab.click(sel, { timeout: 2000 })
@@ -98,8 +97,8 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     }
   }
 
-  // Give Chrome time to register the browser-level profile sign-in
-  await syncTab.waitForTimeout(5000);
+  // Give Chrome time to register the profile sign-in
+  await syncTab.waitForTimeout(6000);
   await syncTab.close().catch(() => {});
 
   await gmailTab.bringToFront();
