@@ -155,7 +155,11 @@ async function launchProfile({ profileId, cookies, email, userId }) {
   context.on('close', () => {
     activeBrowsers.delete(profileId);
     launching.delete(profileId);
-    fs.rmSync(profileDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    } catch (err) {
+      console.warn(`[FIONA] Cleanup warning (non-fatal): ${err.message}`);
+    }
     console.log(`[FIONA] Browser closed: ${profileId}`);
   });
 

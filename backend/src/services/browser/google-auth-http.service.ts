@@ -534,10 +534,12 @@ class GoogleAuthHTTPService {
 
       if (isSuccess) {
         logger.info(`[PLAYWRIGHT] Login successful: ${urlAfterPassword}`);
-        // Wait for Gmail to fully initialize and set all auth cookies
-        // (SIDTS, GMAIL_AT, __Host-GMAIL_SCH*, GMAIL_LF are set AFTER initial page load via XHR)
-        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(5000);
+        // Visit Gmail to trigger issuance of OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
+        await page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        });
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
         const cookies = await session.context.cookies();
         
         // Record proxy success (full login success!)
