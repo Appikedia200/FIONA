@@ -41,6 +41,16 @@ function mapCookies(rawCookies) {
 async function launchProfile({ profileId, cookies, email, userId }) {
   const profileDir = path.join(os.tmpdir(), 'fiona-profiles', profileId);
 
+  if (process.platform === 'win32') {
+    try {
+      const { execSync } = require('child_process');
+      execSync(
+        `wmic process where "name='chrome.exe' and commandline like '%${profileId}%'" call terminate`,
+        { stdio: 'ignore', timeout: 5000 }
+      );
+      await new Promise(r => setTimeout(r, 1200));
+    } catch (_) {}
+  }
   if (fs.existsSync(profileDir)) {
     fs.rmSync(profileDir, { recursive: true, force: true });
   }
@@ -85,6 +95,7 @@ async function launchProfile({ profileId, cookies, email, userId }) {
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: { width: 1280, height: 800 },
+    ignoreDefaultArgs: ['--disable-sync'],
     args: [
       '--no-first-run',
       '--no-default-browser-check',
