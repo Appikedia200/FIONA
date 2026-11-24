@@ -469,6 +469,13 @@ router.get('/:id/status', async (req: Request, res: Response) => {
     const result = await googleAuthService.pollDpCompletion(id);
 
     if (result.status === 'AUTHENTICATED') {
+      // Wait for Gmail to fully initialize all auth cookies (SIDTS, GMAIL_AT, GMAIL_SCH, etc.)
+      // These are set by Gmail's JavaScript AFTER the page loads — capturing immediately misses them
+      logger.info(`[DP] Phone approved — session ${id}, waiting for Gmail to fully initialize...`);
+      await session.page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+      await session.page.waitForTimeout(5000);
+      logger.success(`[DP] Phone approved — session ${id}, extracting cookies now`);
+
       // Extract cookies BEFORE closing anything
       const cookies = await session.page.context().cookies();
 
