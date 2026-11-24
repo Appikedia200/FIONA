@@ -534,6 +534,10 @@ class GoogleAuthHTTPService {
 
       if (isSuccess) {
         logger.info(`[PLAYWRIGHT] Login successful: ${urlAfterPassword}`);
+        // Wait for Gmail to fully initialize and set all auth cookies
+        // (SIDTS, GMAIL_AT, __Host-GMAIL_SCH*, GMAIL_LF are set AFTER initial page load via XHR)
+        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(5000);
         const cookies = await session.context.cookies();
         
         // Record proxy success (full login success!)
@@ -727,6 +731,9 @@ class GoogleAuthHTTPService {
 
           await page.waitForLoadState('networkidle');
           logger.success('[PLAYWRIGHT] Push approved!');
+          // Wait for Gmail to fully initialize all auth cookies after push approval
+          await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+          await page.waitForTimeout(5000);
           const cookies = await session.context.cookies();
 
           return {
@@ -834,6 +841,9 @@ class GoogleAuthHTTPService {
 
         // Success
         logger.info('[PLAYWRIGHT] 2FA code accepted');
+        // Wait for Gmail to fully initialize all auth cookies after TOTP/SMS verification
+        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(5000);
         const cookies2FA = await session.context.cookies();
         return { success: true, stage: '2fa', nextStage: 'success', cookies: cookies2FA };
       }
@@ -909,7 +919,7 @@ class GoogleAuthHTTPService {
     return cookies
       .filter(c =>
         c.domain &&
-        c.domain.includes('google.com') &&
+        (c.domain === '.google.com' || c.domain === 'mail.google.com' || c.domain === 'accounts.google.com') &&
         (c.expires === undefined || c.expires === -1 || c.expires > 0) &&
         KEY_AUTH_COOKIES.has(c.name)
       )
