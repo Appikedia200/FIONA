@@ -736,6 +736,12 @@ class GoogleAuthHTTPService {
           // Wait for Gmail to fully initialize all auth cookies after push approval
           await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
           await page.waitForTimeout(5000);
+          // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* issuance
+          await page.goto('https://mail.google.com/mail/u/0/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+          }).catch(() => {});
+          await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
           const cookies = await session.context.cookies();
 
           return {
@@ -846,6 +852,12 @@ class GoogleAuthHTTPService {
         // Wait for Gmail to fully initialize all auth cookies after TOTP/SMS verification
         await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(5000);
+        // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* issuance
+        await page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
         const cookies2FA = await session.context.cookies();
         return { success: true, stage: '2fa', nextStage: 'success', cookies: cookies2FA };
       }
