@@ -52,6 +52,7 @@ export default function AdminProfilesPage() {
   const [showPassword, setShowPassword] = useState<{[key: string]: boolean}>({});
   const [locallyLaunched, setLocallyLaunched] = useState<Set<string>>(new Set());
   const [launchPending, setLaunchPending] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; email: string } | null>(null);
 
   // Helper to identify Gmail addresses
   const isGmailAddress = (email: string) =>
@@ -155,16 +156,22 @@ export default function AdminProfilesPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this profile? This action cannot be undone.')) return;
+  const handleDelete = (id: string) => {
+    const profile = profiles.find(p => p.id === id);
+    if (!profile) return;
+    setConfirmDelete({ id, email: profile.email });
+  };
 
-    setActionLoading(id);
+  const confirmDeleteAction = async () => {
+    if (!confirmDelete) return;
+
+    setActionLoading(confirmDelete.id);
     try {
-      const response = await apiClient.delete(`/api/admin/profiles/${id}`);
+      const response = await apiClient.delete(`/api/admin/profiles/${confirmDelete.id}`);
       
       // Only show success if backend returned 200
       if (response.status === 200 && response.data.success) {
-        toast.success('Profile deleted');
+        toast.success('Profile deleted from database');
         // Re-fetch profiles AFTER backend confirms deletion
         mutate(swrKey);
       } else {
@@ -174,6 +181,7 @@ export default function AdminProfilesPage() {
       toast.error(error.response?.data?.error || 'Failed to delete profile');
     } finally {
       setActionLoading(null);
+      setConfirmDelete(null);
     }
   };
 
@@ -615,6 +623,47 @@ export default function AdminProfilesPage() {
                       <span className="text-white">{formatDistanceToNow(new Date(selectedProfile.lastLaunched), { addSuffix: true })}</span>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {confirmDelete && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setConfirmDelete(null)}>
+          <div style={{ backgroundColor: '#1A1D2E', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '12px', padding: '24px', maxWidth: '28rem', width: '100%', margin: '0 16px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+              <div style={{ flexShrink: 0, width: '48px', height: '48px', borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Trash2 style={{ width: '24px', height: '24px', color: '#EF4444' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#E2E8F0', marginBottom: '8px' }}>Delete Profile?</h3>
+                <p style={{ fontSize: '14px', color: 'rgba(226, 232, 240, 0.6)', marginBottom: '8px' }}>
+                  Are you sure you want to permanently delete <strong style={{ color: '#E2E8F0' }}>{confirmDelete.email}</strong>?
+                </p>
+                <p style={{ fontSize: '14px', color: 'rgba(226, 232, 240, 0.6)', marginBottom: '16px' }}>
+                  This will remove all profile data, cookies, and launch history from the database.
+                </p>
+                <p style={{ fontSize: '12px', color: '#EF4444', fontWeight: 500, marginBottom: '24px' }}>⚠️ This action cannot be undone.</p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button
+                    onClick={() => setConfirmDelete(null)}
+                    style={{ flex: 1, padding: '10px 16px', backgroundColor: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: '#E2E8F0', borderRadius: '8px', fontSize: '14px', fontWeight: 500, cursor: 'pointer', transition: 'background-color 0.2s' }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.05)')}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmDeleteAction}
+                    style={{ flex: 1, padding: '10px 16px', backgroundColor: '#EF4444', color: '#FFFFFF', borderRadius: '8px', fontSize: '14px', fontWeight: 500, cursor: 'pointer', border: 'none', transition: 'background-color 0.2s' }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#DC2626')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#EF4444')}
+                  >
+                    Delete Profile
+                  </button>
                 </div>
               </div>
             </div>
