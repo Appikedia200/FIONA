@@ -238,15 +238,15 @@ class GoogleAuthHTTPService {
       // Create page
       const page = await context.newPage();
 
-      // Navigate to Gmail and let Google redirect to signin with proper tokens
-      logger.info('[PLAYWRIGHT] Navigating to Gmail (will redirect to signin)...');
-      await page.goto('https://myaccount.google.com', {
+      // Navigate directly to Google sign-in with continue parameter set to myaccount.google.com
+      logger.info('[PLAYWRIGHT] Navigating to Google sign-in...');
+      await page.goto('https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmyaccount.google.com%2F&service=accountsettings&flowName=GlifWebSignIn&flowEntry=ServiceLogin', {
         waitUntil: 'domcontentloaded',
         timeout: 60000,
       });
 
-      // Wait for Google's redirect to the signin identifier page
-      await page.waitForURL('**/accounts.google.com/**', { timeout: 30000 });
+      // Already at accounts.google.com — wait for the sign-in form to be ready
+      await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
       await page.waitForTimeout(500);
 
       // Verify email input is present
