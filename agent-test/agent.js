@@ -77,6 +77,28 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     'https://accounts.google.com/signin/chrome/sync?ssp=1&continue=https://myaccount.google.com',
     { waitUntil: 'domcontentloaded', timeout: 20000 }
   ).catch((e) => console.warn('[FIONA] Sync note (non-fatal):', e.message));
+
+  // Wait for the approval button to render, then click it.
+  // Google uses different button text across UI versions — try all variants.
+  await syncTab.waitForTimeout(2000);
+  for (const sel of [
+    'button:has-text("Yes, I\'m in")',
+    'button:has-text("Yes")',
+    'button:has-text("Continue")',
+    '#yesButton',
+    '[data-primary-action-label]',
+    'input[type="submit"]',
+  ]) {
+    const clicked = await syncTab.click(sel, { timeout: 2000 })
+      .then(() => true)
+      .catch(() => false);
+    if (clicked) {
+      console.log(`[FIONA] Chrome sync approved via: ${sel}`);
+      break;
+    }
+  }
+
+  // Give Chrome time to register the browser-level profile sign-in
   await syncTab.waitForTimeout(5000);
   await syncTab.close().catch(() => {});
 
