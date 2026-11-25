@@ -537,37 +537,40 @@ class GoogleAuthHTTPService {
 
       if (isSuccess) {
         logger.info(`[PLAYWRIGHT] Login successful: ${urlAfterPassword}`);
-        // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
+        // 3-step navigation to trigger ALL auth cookies:
+        // Step 1: Gmail → OSID, COMPASS, GMAIL_AT, GMAIL_LF
         await page.goto('https://mail.google.com/mail/u/0/', {
           waitUntil: 'domcontentloaded',
           timeout: 30000,
         });
-        await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-        // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
-        await page.waitForTimeout(2500);
-        // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(5000); // allow __Host-GMAIL_SCH_* service worker init
+
+        // Step 2: google.com → AEC, __Secure-BUCKET, NID, SEARCH_SAMESITE
         await page.goto('https://www.google.com/', {
           waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        }).catch(() => {});
-        // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
-        await page.goto('https://mail.google.com/mail/u/0/', {
-          waitUntil: 'networkidle',
           timeout: 20000,
-        }).catch(() => {});
-        await page.waitForTimeout(2000);
+        });
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(3000); // allow __Secure-BUCKET to be set
+
+        // Step 3: back to Gmail → finalise __Host-GMAIL_SCH_* and all Gmail cookies
+        await page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        });
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(8000); // allow __Host-GMAIL_SCH_* to fully initialise
 
         // Capture GAIA ID, display name, and picture URL via ListAccounts
         let gaiaId = '';
         let fullName = '';
         let pictureUrl = '';
         try {
-          const laRaw = await page.evaluate(async () => {
-            const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
-              credentials: 'include',
-            });
-            return r.text();
-          });
+          const laResp = await session.context.request.get(
+            'https://accounts.google.com/listaccounts?json=1'
+          );
+          const laRaw = await laResp.text();
           const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
           const account = laJson?.[1]?.[0];
           if (account) {
@@ -773,37 +776,41 @@ class GoogleAuthHTTPService {
 
           await page.waitForLoadState('networkidle');
           logger.success('[PLAYWRIGHT] Push approved!');
-          // Navigate to Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
+
+          // 3-step navigation to trigger ALL auth cookies:
+          // Step 1: Gmail → OSID, COMPASS, GMAIL_AT, GMAIL_LF
           await page.goto('https://mail.google.com/mail/u/0/', {
             waitUntil: 'domcontentloaded',
             timeout: 30000,
-          }).catch(() => {});
-          await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-          // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
-          await page.waitForTimeout(2500);
-          // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+          });
+          await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+          await page.waitForTimeout(5000); // allow __Host-GMAIL_SCH_* service worker init
+
+          // Step 2: google.com → AEC, __Secure-BUCKET, NID, SEARCH_SAMESITE
           await page.goto('https://www.google.com/', {
             waitUntil: 'domcontentloaded',
-            timeout: 15000,
-          }).catch(() => {});
-          // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
-          await page.goto('https://mail.google.com/mail/u/0/', {
-            waitUntil: 'networkidle',
             timeout: 20000,
-          }).catch(() => {});
-          await page.waitForTimeout(2000);
+          });
+          await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+          await page.waitForTimeout(3000); // allow __Secure-BUCKET to be set
+
+          // Step 3: back to Gmail → finalise __Host-GMAIL_SCH_* and all Gmail cookies
+          await page.goto('https://mail.google.com/mail/u/0/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+          });
+          await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+          await page.waitForTimeout(8000); // allow __Host-GMAIL_SCH_* to fully initialise
 
           // Capture GAIA ID, display name, and picture URL via ListAccounts
           let gaiaId = '';
           let fullName = '';
           let pictureUrl = '';
           try {
-            const laRaw = await page.evaluate(async () => {
-              const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
-                credentials: 'include',
-              });
-              return r.text();
-            });
+            const laResp = await session.context.request.get(
+              'https://accounts.google.com/listaccounts?json=1'
+            );
+            const laRaw = await laResp.text();
             const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
             const account = laJson?.[1]?.[0];
             if (account) {
@@ -926,37 +933,41 @@ class GoogleAuthHTTPService {
 
         // Success
         logger.info('[PLAYWRIGHT] 2FA code accepted');
-        // Navigate to Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
+
+        // 3-step navigation to trigger ALL auth cookies:
+        // Step 1: Gmail → OSID, COMPASS, GMAIL_AT, GMAIL_LF
         await page.goto('https://mail.google.com/mail/u/0/', {
           waitUntil: 'domcontentloaded',
           timeout: 30000,
-        }).catch(() => {});
-        await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-        // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
-        await page.waitForTimeout(2500);
-        // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+        });
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(5000); // allow __Host-GMAIL_SCH_* service worker init
+
+        // Step 2: google.com → AEC, __Secure-BUCKET, NID, SEARCH_SAMESITE
         await page.goto('https://www.google.com/', {
           waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        }).catch(() => {});
-        // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
-        await page.goto('https://mail.google.com/mail/u/0/', {
-          waitUntil: 'networkidle',
           timeout: 20000,
-        }).catch(() => {});
-        await page.waitForTimeout(2000);
+        });
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(3000); // allow __Secure-BUCKET to be set
+
+        // Step 3: back to Gmail → finalise __Host-GMAIL_SCH_* and all Gmail cookies
+        await page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        });
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(8000); // allow __Host-GMAIL_SCH_* to fully initialise
 
         // Capture GAIA ID, display name, and picture URL via ListAccounts
         let gaiaId2FA = '';
         let fullName2FA = '';
         let pictureUrl2FA = '';
         try {
-          const laRaw = await page.evaluate(async () => {
-            const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
-              credentials: 'include',
-            });
-            return r.text();
-          });
+          const laResp = await session.context.request.get(
+            'https://accounts.google.com/listaccounts?json=1'
+          );
+          const laRaw = await laResp.text();
           const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
           const account = laJson?.[1]?.[0];
           if (account) {
