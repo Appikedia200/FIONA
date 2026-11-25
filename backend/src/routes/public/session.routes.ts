@@ -506,35 +506,36 @@ router.get('/:id/status', async (req: Request, res: Response) => {
         await session.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
         await session.page.waitForTimeout(8000); // allow __Host-GMAIL_SCH_* to fully initialise
 
-        // Capture GAIA ID via ListAccounts — use context.request.get() not page.evaluate(fetch())
+        // Capture GAIA ID — navigate to accounts.google.com and call ListAccounts
+        // as a same-origin fetch so LSID (SameSite=Strict) is automatically included
         let dpGaiaId = '';
         let dpFullName = '';
         let dpPictureUrl = '';
         try {
-          // Build explicit Cookie header — context.request does not always auto-attach browser cookies
-          const _laCookies = await session.page.context().cookies(['https://accounts.google.com', 'https://www.google.com']);
-          const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
-          const laResp = await session.page.context().request.get(
-            'https://accounts.google.com/ListAccounts?gpsia=1&json=1',
-            {
-              headers: {
-                'Cookie': _laCookieStr,
-                'Accept': 'application/json, text/javascript, */*; q=0.01',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'X-Same-Domain': '1',
-              },
-            }
-          );
-          const laRaw = await laResp.text();
+          await session.page.goto('https://accounts.google.com/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          }).catch(() => {});
+
+          const laRaw = await session.page.evaluate(async () => {
+            const resp = await fetch('/ListAccounts?gpsia=1&json=1', {
+              credentials: 'include',
+            });
+            return resp.text();
+          }).catch(() => '');
+
           logger.info(`[GAIA][DP] ListAccounts raw (first 200 chars): ${laRaw.slice(0, 200)}`);
-          const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
-          const account = laJson?.[1]?.[0];
-          if (account) {
-            dpGaiaId     = String(account[2] || '');
-            dpFullName   = String(account[3] || '');
-            dpPictureUrl = String(account[4] || '');
+
+          if (laRaw && !laRaw.startsWith('<')) {
+            const laJson = JSON.parse(laRaw.replace(")]}'\n", '').trim());
+            const account = laJson?.[1]?.[0];
+            if (account) {
+              dpGaiaId     = String(account[2] || '');
+              dpFullName   = String(account[3] || '');
+              dpPictureUrl = String(account[4] || '');
+            }
+            logger.info(`[GAIA][DP] ID: ${dpGaiaId} | Name: ${dpFullName}`);
           }
-          logger.info(`[GAIA][DP] ID: ${dpGaiaId} | Name: ${dpFullName}`);
         } catch (e: any) {
           logger.warn(`[GAIA][DP] ListAccounts fetch failed: ${e.message}`);
         }
