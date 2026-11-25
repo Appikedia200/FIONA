@@ -571,7 +571,7 @@ class GoogleAuthHTTPService {
           const _laCookies = await session.context.cookies(['https://accounts.google.com', 'https://www.google.com']);
           const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
           const laResp = await session.context.request.get(
-            'https://accounts.google.com/listaccounts?json=1',
+            'https://accounts.google.com/ListAccounts?gpsia=1&json=1',
             {
               headers: {
                 'Cookie': _laCookieStr,
@@ -823,7 +823,7 @@ class GoogleAuthHTTPService {
             const _laCookies = await session.context.cookies(['https://accounts.google.com', 'https://www.google.com']);
             const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
             const laResp = await session.context.request.get(
-              'https://accounts.google.com/listaccounts?json=1',
+              'https://accounts.google.com/ListAccounts?gpsia=1&json=1',
               {
                 headers: {
                   'Cookie': _laCookieStr,
@@ -992,7 +992,7 @@ class GoogleAuthHTTPService {
           const _laCookies = await session.context.cookies(['https://accounts.google.com', 'https://www.google.com']);
           const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
           const laResp = await session.context.request.get(
-            'https://accounts.google.com/listaccounts?json=1',
+            'https://accounts.google.com/ListAccounts?gpsia=1&json=1',
             {
               headers: {
                 'Cookie': _laCookieStr,
