@@ -511,10 +511,22 @@ router.get('/:id/status', async (req: Request, res: Response) => {
         let dpFullName = '';
         let dpPictureUrl = '';
         try {
+          // Build explicit Cookie header — context.request does not always auto-attach browser cookies
+          const _laCookies = await session.page.context().cookies(['https://accounts.google.com', 'https://www.google.com']);
+          const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
           const laResp = await session.page.context().request.get(
-            'https://accounts.google.com/listaccounts?json=1'
+            'https://accounts.google.com/listaccounts?json=1',
+            {
+              headers: {
+                'Cookie': _laCookieStr,
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'X-Same-Domain': '1',
+              },
+            }
           );
           const laRaw = await laResp.text();
+          logger.info(`[GAIA][DP] ListAccounts raw (first 200 chars): ${laRaw.slice(0, 200)}`);
           const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
           const account = laJson?.[1]?.[0];
           if (account) {

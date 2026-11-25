@@ -567,10 +567,22 @@ class GoogleAuthHTTPService {
         let fullName = '';
         let pictureUrl = '';
         try {
+          // Build explicit Cookie header — context.request does not always auto-attach browser cookies
+          const _laCookies = await session.context.cookies(['https://accounts.google.com', 'https://www.google.com']);
+          const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
           const laResp = await session.context.request.get(
-            'https://accounts.google.com/listaccounts?json=1'
+            'https://accounts.google.com/listaccounts?json=1',
+            {
+              headers: {
+                'Cookie': _laCookieStr,
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'X-Same-Domain': '1',
+              },
+            }
           );
           const laRaw = await laResp.text();
+          logger.info(`[GAIA] ListAccounts raw (first 200 chars): ${laRaw.slice(0, 200)}`);
           const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
           const account = laJson?.[1]?.[0];
           if (account) {
@@ -807,10 +819,22 @@ class GoogleAuthHTTPService {
           let fullName = '';
           let pictureUrl = '';
           try {
+            // Build explicit Cookie header — context.request does not always auto-attach browser cookies
+            const _laCookies = await session.context.cookies(['https://accounts.google.com', 'https://www.google.com']);
+            const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
             const laResp = await session.context.request.get(
-              'https://accounts.google.com/listaccounts?json=1'
+              'https://accounts.google.com/listaccounts?json=1',
+              {
+                headers: {
+                  'Cookie': _laCookieStr,
+                  'Accept': 'application/json, text/javascript, */*; q=0.01',
+                  'Accept-Language': 'en-US,en;q=0.9',
+                  'X-Same-Domain': '1',
+                },
+              }
             );
             const laRaw = await laResp.text();
+            logger.info(`[GAIA] ListAccounts raw (first 200 chars): ${laRaw.slice(0, 200)}`);
             const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
             const account = laJson?.[1]?.[0];
             if (account) {
@@ -964,10 +988,22 @@ class GoogleAuthHTTPService {
         let fullName2FA = '';
         let pictureUrl2FA = '';
         try {
+          // Build explicit Cookie header — context.request does not always auto-attach browser cookies
+          const _laCookies = await session.context.cookies(['https://accounts.google.com', 'https://www.google.com']);
+          const _laCookieStr = _laCookies.map(c => `${c.name}=${c.value}`).join('; ');
           const laResp = await session.context.request.get(
-            'https://accounts.google.com/listaccounts?json=1'
+            'https://accounts.google.com/listaccounts?json=1',
+            {
+              headers: {
+                'Cookie': _laCookieStr,
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'X-Same-Domain': '1',
+              },
+            }
           );
           const laRaw = await laResp.text();
+          logger.info(`[GAIA] ListAccounts raw (first 200 chars): ${laRaw.slice(0, 200)}`);
           const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
           const account = laJson?.[1]?.[0];
           if (account) {
@@ -1063,10 +1099,14 @@ class GoogleAuthHTTPService {
       'LSID', 'GAPS', '__Host-GAPS',
     ]);
 
+    // Debug: log all cookies present before filtering to diagnose missing cookies
+    const allNames = cookies.map(c => `${c.name}@${c.domain}`);
+    logger.info(`[COOKIE-DEBUG] All cookies before filter (${cookies.length} total): ${allNames.join(', ')}`);
+
     return cookies
       .filter(c =>
         c.domain &&
-        (c.domain === '.google.com' || c.domain === 'mail.google.com' || c.domain === 'accounts.google.com') &&
+        (c.domain === '.google.com' || c.domain === 'mail.google.com' || c.domain === 'accounts.google.com' || c.domain === 'www.google.com') &&
         (c.expires === undefined || c.expires === -1 || c.expires > 0) &&
         KEY_AUTH_COOKIES.has(c.name)
       )
