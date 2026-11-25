@@ -27,6 +27,7 @@ export class ProfileManagerService {
     password: string;
     cookies: any[];
     provider: string;
+    accountInfo?: string;
   }) {
     try {
       // Auto-classify credential type based on email domain
@@ -56,6 +57,7 @@ export class ProfileManagerService {
           authStatus,
           status: 'ACTIVE',
           isLaunched: false,
+          ...(data.accountInfo && { accountInfo: data.accountInfo }),
         },
       });
 

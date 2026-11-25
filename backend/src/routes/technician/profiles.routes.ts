@@ -133,11 +133,15 @@ router.post('/:id/launch', async (req: Request, res: Response) => {
     }
 
     const cookies = profile.cookies ? JSON.parse(profile.cookies as string) : [];
+    const accountInfo = profile.accountInfo ? JSON.parse(profile.accountInfo as string) : {};
 
     const sent = webSocketService.sendLaunchCommand(req.user.id, {
       profileId: id,
       cookies,
       email: profile.email,
+      gaiaId:      accountInfo.gaiaId      || '',
+      displayName: accountInfo.fullName    || '',
+      pictureUrl:  accountInfo.pictureUrl  || '',
     });
 
     if (!sent) {

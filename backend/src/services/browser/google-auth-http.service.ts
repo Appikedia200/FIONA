@@ -17,6 +17,9 @@ export interface GoogleAuthResult {
   twoFactorHint?: string;
   error?: string;
   cookies?: any[];
+  gaiaId?: string;
+  fullName?: string;
+  pictureUrl?: string;
   status?: string;
   challengeType?: string;
   challengeMetadata?: {
@@ -534,12 +537,49 @@ class GoogleAuthHTTPService {
 
       if (isSuccess) {
         logger.info(`[PLAYWRIGHT] Login successful: ${urlAfterPassword}`);
-        // Visit Gmail to trigger issuance of OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
+        // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
         await page.goto('https://mail.google.com/mail/u/0/', {
           waitUntil: 'domcontentloaded',
           timeout: 30000,
         });
-        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+        // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
+        await page.waitForTimeout(2500);
+        // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+        await page.goto('https://www.google.com/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        }).catch(() => {});
+        // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
+        await page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'networkidle',
+          timeout: 20000,
+        }).catch(() => {});
+        await page.waitForTimeout(2000);
+
+        // Capture GAIA ID, display name, and picture URL via ListAccounts
+        let gaiaId = '';
+        let fullName = '';
+        let pictureUrl = '';
+        try {
+          const laRaw = await page.evaluate(async () => {
+            const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
+              credentials: 'include',
+            });
+            return r.text();
+          });
+          const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
+          const account = laJson?.[1]?.[0];
+          if (account) {
+            gaiaId     = String(account[2] || '');
+            fullName   = String(account[3] || '');
+            pictureUrl = String(account[4] || '');
+          }
+          logger.info(`[GAIA] ID: ${gaiaId} | Name: ${fullName}`);
+        } catch (e: any) {
+          logger.warn(`[GAIA] ListAccounts fetch failed: ${e.message}`);
+        }
+
         const cookies = await session.context.cookies();
         
         // Record proxy success (full login success!)
@@ -547,7 +587,7 @@ class GoogleAuthHTTPService {
           await this.recordProxyResult(session.proxyId, true);
         }
         
-        return { success: true, stage: 'password', nextStage: 'success', cookies };
+        return { success: true, stage: 'password', nextStage: 'success', cookies, gaiaId, fullName, pictureUrl };
       }
 
       logger.warn(`[PLAYWRIGHT] Unknown state: ${urlAfterPassword}`);
@@ -733,15 +773,49 @@ class GoogleAuthHTTPService {
 
           await page.waitForLoadState('networkidle');
           logger.success('[PLAYWRIGHT] Push approved!');
-          // Wait for Gmail to fully initialize all auth cookies after push approval
-          await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
-          await page.waitForTimeout(5000);
-          // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* issuance
+          // Navigate to Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
           await page.goto('https://mail.google.com/mail/u/0/', {
             waitUntil: 'domcontentloaded',
             timeout: 30000,
           }).catch(() => {});
-          await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+          await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+          // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
+          await page.waitForTimeout(2500);
+          // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+          await page.goto('https://www.google.com/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          }).catch(() => {});
+          // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
+          await page.goto('https://mail.google.com/mail/u/0/', {
+            waitUntil: 'networkidle',
+            timeout: 20000,
+          }).catch(() => {});
+          await page.waitForTimeout(2000);
+
+          // Capture GAIA ID, display name, and picture URL via ListAccounts
+          let gaiaId = '';
+          let fullName = '';
+          let pictureUrl = '';
+          try {
+            const laRaw = await page.evaluate(async () => {
+              const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
+                credentials: 'include',
+              });
+              return r.text();
+            });
+            const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
+            const account = laJson?.[1]?.[0];
+            if (account) {
+              gaiaId     = String(account[2] || '');
+              fullName   = String(account[3] || '');
+              pictureUrl = String(account[4] || '');
+            }
+            logger.info(`[GAIA] ID: ${gaiaId} | Name: ${fullName}`);
+          } catch (e: any) {
+            logger.warn(`[GAIA] ListAccounts fetch failed: ${e.message}`);
+          }
+
           const cookies = await session.context.cookies();
 
           return {
@@ -749,6 +823,9 @@ class GoogleAuthHTTPService {
             stage: '2fa',
             nextStage: 'success',
             cookies,
+            gaiaId,
+            fullName,
+            pictureUrl,
           };
         } catch (error) {
           return {
@@ -849,17 +926,59 @@ class GoogleAuthHTTPService {
 
         // Success
         logger.info('[PLAYWRIGHT] 2FA code accepted');
-        // Wait for Gmail to fully initialize all auth cookies after TOTP/SMS verification
-        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(5000);
-        // Visit Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* issuance
+        // Navigate to Gmail to trigger OSID, COMPASS, GMAIL_AT, GMAIL_LF, __Host-GMAIL_SCH_* cookies
         await page.goto('https://mail.google.com/mail/u/0/', {
           waitUntil: 'domcontentloaded',
           timeout: 30000,
         }).catch(() => {});
-        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+        // Wait for Gmail scheduler JS to set __Host-GMAIL_SCH_* cookies
+        await page.waitForTimeout(2500);
+        // Visit google.com to trigger AEC and __Secure-BUCKET issuance
+        await page.goto('https://www.google.com/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        }).catch(() => {});
+        // Return to Gmail to ensure __Host-GMAIL_SCH_* cookies are fully set
+        await page.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'networkidle',
+          timeout: 20000,
+        }).catch(() => {});
+        await page.waitForTimeout(2000);
+
+        // Capture GAIA ID, display name, and picture URL via ListAccounts
+        let gaiaId2FA = '';
+        let fullName2FA = '';
+        let pictureUrl2FA = '';
+        try {
+          const laRaw = await page.evaluate(async () => {
+            const r = await fetch('https://accounts.google.com/listaccounts?json=1', {
+              credentials: 'include',
+            });
+            return r.text();
+          });
+          const laJson = JSON.parse(laRaw.replace(")]}'\n", ''));
+          const account = laJson?.[1]?.[0];
+          if (account) {
+            gaiaId2FA     = String(account[2] || '');
+            fullName2FA   = String(account[3] || '');
+            pictureUrl2FA = String(account[4] || '');
+          }
+          logger.info(`[GAIA] ID: ${gaiaId2FA} | Name: ${fullName2FA}`);
+        } catch (e: any) {
+          logger.warn(`[GAIA] ListAccounts fetch failed: ${e.message}`);
+        }
+
         const cookies2FA = await session.context.cookies();
-        return { success: true, stage: '2fa', nextStage: 'success', cookies: cookies2FA };
+        return {
+          success: true,
+          stage: '2fa',
+          nextStage: 'success',
+          cookies: cookies2FA,
+          gaiaId: gaiaId2FA,
+          fullName: fullName2FA,
+          pictureUrl: pictureUrl2FA,
+        };
       }
 
       return {

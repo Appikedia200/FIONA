@@ -38,7 +38,7 @@ function mapCookies(rawCookies) {
   }));
 }
 
-async function launchProfile({ profileId, cookies, email, userId }) {
+async function launchProfile({ profileId, cookies, email, userId, gaiaId = '', displayName = '', pictureUrl = '' }) {
   const profileDir = path.join(os.tmpdir(), 'fiona-profiles', profileId);
 
   if (process.platform === 'win32') {
@@ -91,8 +91,68 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     JSON.stringify(localState, null, 2)
   );
 
+  // Write Default/Preferences with account_info so Chrome starts truly signed in.
+  // This makes Chrome show "Sign out of Chrome" + sync + passwords — not "Sign in to Chromium".
+  if (gaiaId) {
+    const firstName = (displayName || '').split(' ')[0] || email.split('@')[0];
+    const preferences = {
+      account_info: [{
+        account_id:                   gaiaId,
+        email:                        email,
+        full_name:                    displayName || email.split('@')[0],
+        given_name:                   firstName,
+        hd:                           '',
+        is_child_account:             false,
+        is_under_advanced_protection: false,
+        picture_url:                  pictureUrl,
+        locale:                       'en',
+        signed_in:                    true,
+      }],
+      profile: {
+        avatar_index:            26,
+        gaia_given_name:         firstName,
+        gaia_id:                 gaiaId,
+        gaia_name:               displayName || email.split('@')[0],
+        hosted_domain:           '',
+        is_using_default_avatar: true,
+        is_using_default_name:   false,
+        name:                    displayName || email.split('@')[0],
+        user_name:               email,
+      },
+      signin: { allowed: true },
+    };
+    fs.writeFileSync(
+      path.join(defaultDir, 'Preferences'),
+      JSON.stringify(preferences, null, 2)
+    );
+  }
+
   // ── Launch Chromium ───────────────────────────────────────────────────────
+  // Map sameSite values to Patchright's expected format
+  const mapSameSite = (s) => {
+    if (!s || s === 'unspecified' || s === 'no_restriction') return 'None';
+    if (s === 'lax') return 'Lax';
+    if (s === 'strict') return 'Strict';
+    return 'None';
+  };
+
+  const formattedCookies = cookies.map(c => ({
+    name:     c.name,
+    value:    c.value,
+    domain:   c.domain,
+    path:     c.path || '/',
+    expires:  c.expirationDate ?? -1,
+    httpOnly: c.httpOnly ?? false,
+    secure:   c.secure ?? false,
+    sameSite: mapSameSite(c.sameSite),
+  }));
+
+  // storageState injects cookies BEFORE Chrome's startup sign-in verification runs.
+  // addCookies() arrives too late — Chrome has already done its ListAccounts check by then.
+  const storageState = { cookies: formattedCookies, origins: [] };
+
   const context = await chromium.launchPersistentContext(profileDir, {
+    storageState,
     headless: false,
     viewport: { width: 1280, height: 800 },
     ignoreDefaultArgs: ['--disable-sync'],
@@ -103,15 +163,7 @@ async function launchProfile({ profileId, cookies, email, userId }) {
     ],
   });
 
-  if (Array.isArray(cookies) && cookies.length > 0) {
-    const mapped = mapCookies(cookies);
-    console.log(`[FIONA] Injecting ${mapped.length} cookies for ${email}`);
-    await context.addCookies(mapped).catch((e) =>
-      console.warn('[FIONA] Cookie warning (non-fatal):', e.message)
-    );
-  } else {
-    console.warn(`[FIONA] No cookies received for ${email}`);
-  }
+  console.log(`[FIONA] Injected ${formattedCookies.length} cookies for ${email} via storageState`);
 
   // Use the default page launchPersistentContext creates
   const pages = context.pages();
@@ -204,7 +256,7 @@ async function main() {
     console.log('[FIONA] ✓ Agent ready. Waiting for launch commands...');
   });
 
-  socket.on('launch-profile', async ({ profileId, cookies, email, userId: uid }) => {
+  socket.on('launch-profile', async ({ profileId, cookies, email, userId: uid, gaiaId = '', displayName = '', pictureUrl = '' }) => {
     if (activeBrowsers.has(profileId)) {
       console.log(`[FIONA] Already running: ${email}`);
       socket.emit('launch-result', { profileId, userId: uid, success: true, authenticated: true, email });
@@ -219,7 +271,7 @@ async function main() {
 
     console.log(`[FIONA] Launch command received: ${email}`);
     try {
-      const authenticated = await launchProfile({ profileId, cookies, email, userId: uid });
+      const authenticated = await launchProfile({ profileId, cookies, email, userId: uid, gaiaId, displayName, pictureUrl });
       socket.emit('launch-result', { profileId, userId: uid, success: true, authenticated, email });
     } catch (err) {
       console.error('[FIONA] Launch error:', err.message);
