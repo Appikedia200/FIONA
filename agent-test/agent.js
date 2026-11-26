@@ -82,42 +82,6 @@ async function launchProfile({ profileId, email, userId, browserState }) {
     JSON.stringify(localState, null, 2)
   );
 
-  // Write Default/Preferences with account_info so Chrome starts truly signed in.
-  // This makes Chrome show "Sign out of Chrome" + sync + passwords — not "Sign in to Chromium".
-  if (gaiaId) {
-    const firstName = (displayName || '').split(' ')[0] || email.split('@')[0];
-    const preferences = {
-      account_info: [{
-        account_id:                   gaiaId,
-        email:                        email,
-        full_name:                    displayName || email.split('@')[0],
-        given_name:                   firstName,
-        hd:                           '',
-        is_child_account:             false,
-        is_under_advanced_protection: false,
-        picture_url:                  pictureUrl,
-        locale:                       'en',
-        signed_in:                    true,
-      }],
-      profile: {
-        avatar_index:            26,
-        gaia_given_name:         firstName,
-        gaia_id:                 gaiaId,
-        gaia_name:               displayName || email.split('@')[0],
-        hosted_domain:           '',
-        is_using_default_avatar: true,
-        is_using_default_name:   false,
-        name:                    displayName || email.split('@')[0],
-        user_name:               email,
-      },
-      signin: { allowed: true },
-    };
-    fs.writeFileSync(
-      path.join(defaultDir, 'Preferences'),
-      JSON.stringify(preferences, null, 2)
-    );
-  }
-
   // ── Launch Chromium ───────────────────────────────────────────────────────
   // storageState restores cookies AND localStorage for all origins atomically.
   // ignoreDefaultArgs removed — it was stripping --disable-sync (Playwright's
