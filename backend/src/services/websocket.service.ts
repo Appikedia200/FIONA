@@ -212,9 +212,7 @@ export class WebSocketService {
     profileId: string;
     cookies: any[];
     email: string;
-    gaiaId?: string;
-    displayName?: string;
-    pictureUrl?: string;
+    browserState?: string | null;
   }): boolean {
     if (!this.io || !this.hasAgentConnected(userId)) return false;
     this.io.to(`agent:${userId}`).emit('launch-profile', { ...data, userId });

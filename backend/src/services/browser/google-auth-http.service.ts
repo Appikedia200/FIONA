@@ -1135,7 +1135,7 @@ class GoogleAuthHTTPService {
     return cookies
       .filter(c =>
         c.domain &&
-        (c.domain === '.google.com' || c.domain === 'mail.google.com' || c.domain === 'accounts.google.com' || c.domain === 'www.google.com') &&
+        (c.domain === '.google.com' || c.domain === 'mail.google.com' || c.domain === 'accounts.google.com' || c.domain === '.accounts.google.com' || c.domain === 'www.google.com' || c.domain === 'myaccount.google.com') &&
         (c.expires === undefined || c.expires === -1 || c.expires > 0) &&
         KEY_AUTH_COOKIES.has(c.name)
       )

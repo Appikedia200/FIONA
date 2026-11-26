@@ -295,6 +295,7 @@ model Profile {
   tokens           String?
   accountInfo      String?
   securityInfo     String?
+  browserState     String?
   browserProfileId String?
   lastLaunched     DateTime?
   launchCount      Int       @default(0)

