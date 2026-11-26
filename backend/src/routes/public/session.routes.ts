@@ -437,7 +437,7 @@ router.post('/:id/2fa', async (req: Request, res: Response) => {
 
     // Create profile and destroy session — runs regardless of DB state
     if (result.success && result.cookies) {
-      await createProfileFromSession(id, result.cookies, result.gaiaId, result.fullName, result.pictureUrl);
+      await createProfileFromSession(id, result.cookies);
       await resourceManager.destroySession(id);
     }
 
