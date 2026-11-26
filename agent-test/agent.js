@@ -89,7 +89,6 @@ async function launchProfile({ profileId, email, userId, browserState }) {
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: { width: 1280, height: 800 },
-    storageState: playwrightState,
     args: [
       '--no-first-run',
       '--no-default-browser-check',
@@ -97,7 +96,19 @@ async function launchProfile({ profileId, email, userId, browserState }) {
       '--disable-background-networking',
     ],
   });
-  console.log(`[FIONA] Browser state applied for ${email}`);
+
+  // Inject cookies manually — storageState is unreliable in launchPersistentContext.
+  // context.addCookies() goes directly to the browser's cookie store via CDP.
+  if (playwrightState?.cookies?.length) {
+    try {
+      await context.addCookies(playwrightState.cookies);
+      console.log(`[FIONA] ${playwrightState.cookies.length} cookies injected`);
+    } catch (cookieErr) {
+      console.error('[FIONA] Cookie injection error:', cookieErr.message);
+    }
+  } else {
+    console.warn('[FIONA] No cookies to inject — browserState missing or empty');
+  }
 
   // Use the default blank tab Chrome opens at launch
   const pages = context.pages();
