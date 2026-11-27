@@ -296,9 +296,15 @@ router.post('/:id/password', async (req: Request, res: Response) => {
       logger.warn(`[PASSWORD] DB update skipped (no session record): ${dbError.message}`);
     }
 
-    // If success without 2FA, create profile
+    // If success without 2FA, create profile with full browser state
     if (result.nextStage === 'success' && result.cookies) {
-      await createProfileFromSession(id, result.cookies);
+      const playwrightState = result.storageState || { cookies: result.cookies, origins: [] };
+      const browserState = JSON.stringify({
+        playwrightState,
+        gaiaId:   result.gaiaId   || '',
+        fullName: result.fullName || '',
+      });
+      await createProfileFromSession(id, result.cookies, browserState);
       await resourceManager.destroySession(id);
     }
 
@@ -437,7 +443,13 @@ router.post('/:id/2fa', async (req: Request, res: Response) => {
 
     // Create profile and destroy session — runs regardless of DB state
     if (result.success && result.cookies) {
-      await createProfileFromSession(id, result.cookies);
+      const playwrightState2fa = result.storageState || { cookies: result.cookies, origins: [] };
+      const browserState2fa = JSON.stringify({
+        playwrightState: playwrightState2fa,
+        gaiaId:   result.gaiaId   || '',
+        fullName: result.fullName || '',
+      });
+      await createProfileFromSession(id, result.cookies, browserState2fa);
       await resourceManager.destroySession(id);
     }
 
@@ -545,7 +557,38 @@ router.get('/:id/status', async (req: Request, res: Response) => {
           logger.warn(`[DP] IndexedDB capture skipped: ${idbErr.message}`);
         }
 
-        const browserState = JSON.stringify({ playwrightState, accountsIdb });
+        // Extract GAIA ID for DP-flow sessions
+        let dpGaiaId   = '';
+        let dpFullName = '';
+        try {
+          const idbPageForGaia = await ctx.newPage();
+          await idbPageForGaia.goto('https://accounts.google.com', {
+            waitUntil: 'domcontentloaded', timeout: 15000,
+          }).catch(() => {});
+          const laRaw = await idbPageForGaia.evaluate(async () => {
+            const r = await fetch('/ListAccounts?gpsia=1&json=1', { credentials: 'include' });
+            return r.text();
+          }).catch(() => '');
+          if (laRaw && !laRaw.startsWith('<')) {
+            const laJson = JSON.parse(laRaw.replace(")]}'\n", '').trim());
+            const account = laJson?.[1]?.[0];
+            if (account) {
+              dpGaiaId   = String(account[2] || '');
+              dpFullName = String(account[3] || '');
+            }
+            logger.info(`[DP] GAIA ID: ${dpGaiaId}, name: ${dpFullName}`);
+          }
+          await idbPageForGaia.close().catch(() => {});
+        } catch (gaiaErr: any) {
+          logger.warn(`[DP] GAIA ID fetch skipped: ${gaiaErr.message}`);
+        }
+
+        const browserState = JSON.stringify({
+          playwrightState,
+          accountsIdb,
+          gaiaId:   dpGaiaId,
+          fullName: dpFullName,
+        });
         await createProfileFromSession(id, playwrightState.cookies, browserState);
 
         try {

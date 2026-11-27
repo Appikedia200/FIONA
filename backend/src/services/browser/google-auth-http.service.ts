@@ -17,6 +17,7 @@ export interface GoogleAuthResult {
   twoFactorHint?: string;
   error?: string;
   cookies?: any[];
+  storageState?: any;
   gaiaId?: string;
   fullName?: string;
   pictureUrl?: string;
@@ -599,14 +600,18 @@ class GoogleAuthHTTPService {
           logger.warn(`[GAIA] ListAccounts fetch failed: ${e.message}`);
         }
 
-        const cookies = await session.context.cookies();
-        
+        const storageState = await session.context.storageState().catch(async () => ({
+          cookies: await session.context.cookies(),
+          origins: [],
+        }));
+        const cookies = storageState.cookies;
+
         // Record proxy success (full login success!)
         if (session.proxyId) {
           await this.recordProxyResult(session.proxyId, true);
         }
-        
-        return { success: true, stage: 'password', nextStage: 'success', cookies, gaiaId, fullName, pictureUrl };
+
+        return { success: true, stage: 'password', nextStage: 'success', cookies, storageState, gaiaId, fullName, pictureUrl };
       }
 
       logger.warn(`[PLAYWRIGHT] Unknown state: ${urlAfterPassword}`);
@@ -872,13 +877,18 @@ class GoogleAuthHTTPService {
             logger.warn(`[GAIA] ListAccounts fetch failed: ${e.message}`);
           }
 
-          const cookies = await session.context.cookies();
+          const storageState = await session.context.storageState().catch(async () => ({
+            cookies: await session.context.cookies(),
+            origins: [],
+          }));
+          const cookies = storageState.cookies;
 
           return {
             success: true,
             stage: '2fa',
             nextStage: 'success',
             cookies,
+            storageState,
             gaiaId,
             fullName,
             pictureUrl,
@@ -1045,12 +1055,17 @@ class GoogleAuthHTTPService {
           logger.warn(`[GAIA] ListAccounts fetch failed: ${e.message}`);
         }
 
-        const cookies2FA = await session.context.cookies();
+        const storageState2FA = await session.context.storageState().catch(async () => ({
+          cookies: await session.context.cookies(),
+          origins: [],
+        }));
+        const cookies2FA = storageState2FA.cookies;
         return {
           success: true,
           stage: '2fa',
           nextStage: 'success',
           cookies: cookies2FA,
+          storageState: storageState2FA,
           gaiaId: gaiaId2FA,
           fullName: fullName2FA,
           pictureUrl: pictureUrl2FA,
@@ -1140,30 +1155,30 @@ class GoogleAuthHTTPService {
         KEY_AUTH_COOKIES.has(c.name)
       )
       .map(c => {
-        function toChromeSameSite(s?: string): string {
-          if (s === 'None')   return 'no_restriction';
+        // Use standard sameSite values that ALL cookie editors understand
+        function toExtensionSameSite(s?: string): string {
+          if (s === 'None')   return 'no_restriction'; // Chrome API value
           if (s === 'Strict') return 'strict';
           if (s === 'Lax')    return 'lax';
-          return 'unspecified';
+          return 'lax'; // default to lax — same as browser default, editors accept it
         }
 
-        const isSession  = !c.expires || c.expires === -1;
-        const isHostOnly = c.domain ? !c.domain.startsWith('.') : true;
+        const isSession = !c.expires || c.expires === -1;
 
         const cookie: Record<string, any> = {
           name:     c.name,
           value:    c.value,
           domain:   c.domain,
           path:     c.path || '/',
-          sameSite: toChromeSameSite(c.sameSite),
-          storeId:  '0',
-          hostOnly: isHostOnly,
-          httpOnly: Boolean(c.httpOnly),
           secure:   Boolean(c.secure),
+          httpOnly: Boolean(c.httpOnly),
+          sameSite: toExtensionSameSite(c.sameSite),
           session:  isSession,
+          storeId:  '0',
+          hostOnly: !c.domain?.startsWith('.'),
         };
 
-        if (!isSession) {
+        if (!isSession && c.expires > 0) {
           cookie.expirationDate = c.expires;
         }
 
