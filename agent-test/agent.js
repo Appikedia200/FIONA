@@ -29,19 +29,18 @@ async function launchProfile({ profileId, email, userId, browserState }) {
       await new Promise(r => setTimeout(r, 1200));
     } catch (_) {}
   }
-  if (fs.existsSync(profileDir)) {
-    fs.rmSync(profileDir, { recursive: true, force: true });
-  }
+  if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
   fs.mkdirSync(profileDir, { recursive: true });
 
-  // ── Parse VPS browser state ───────────────────────────────────────────────
   let playwrightState = null;
+  let accountsIdb     = null;
   let gaiaId          = '';
   let fullName        = '';
   if (browserState) {
     try {
       const parsed    = JSON.parse(browserState);
       playwrightState = parsed.playwrightState || null;
+      accountsIdb     = parsed.accountsIdb     || null;
       gaiaId          = parsed.gaiaId          || '';
       fullName        = parsed.fullName        || '';
     } catch (e) {
@@ -49,14 +48,6 @@ async function launchProfile({ profileId, email, userId, browserState }) {
     }
   }
 
-  // ── Cookie normalizer: Chrome Extension format → Playwright format ────────
-  // Cookies stored in DB are Chrome Extension format (expirationDate, storeId,
-  // sameSite: 'no_restriction'|'lax'|'strict'|'unspecified').
-  // Playwright addCookies() needs: expires (not expirationDate), no extra fields,
-  // sameSite as 'None'|'Lax'|'Strict'.
-  // CRITICAL: 'unspecified' must map to 'Lax' (browser default), NOT 'None'.
-  // SameSite=None requires Secure=true — cookies like SID, HSID, SIDCC, APISID
-  // have secure:false, mapping them to None causes Playwright to reject silently.
   function normalizeCookies(cookies) {
     return (cookies || []).map(c => {
       const out = {
@@ -71,7 +62,7 @@ async function launchProfile({ profileId, email, userId, browserState }) {
           if (s === 'no_restriction') return 'None';
           if (s === 'strict')         return 'Strict';
           if (s === 'lax')            return 'Lax';
-          return 'Lax'; // 'unspecified' and anything else → Lax (browser default)
+          return 'Lax';
         })(),
       };
       const expiry = c.expires ?? c.expirationDate ?? -1;
@@ -80,50 +71,51 @@ async function launchProfile({ profileId, email, userId, browserState }) {
     });
   }
 
-  // ── Write Local State ─────────────────────────────────────────────────────
   const defaultDir = path.join(profileDir, 'Default');
   fs.mkdirSync(defaultDir, { recursive: true });
 
+  const displayName = fullName || email.split('@')[0].replace(/[._]/g, ' ');
   const localState = {
     profile: {
       info_cache: {
         Default: {
-          active_time:                  Date.now() / 1000,
-          avatar_icon:                  'chrome://theme/IDR_PROFILE_AVATAR_26',
-          gaia_given_name:              fullName || email,
-          gaia_id:                      gaiaId,
-          gaia_name:                    fullName || email,
-          hosted_domain:                '',
-          is_consented_primary_account: false,
-          is_ephemeral:                 false,
-          is_using_default_avatar:      true,
-          is_using_default_name:        false,
-          name:                         email,
-          shortcut_name:                email,
-          user_name:                    email,
+          active_time:                    Date.now() / 1000,
+          avatar_icon:                    'chrome://theme/IDR_PROFILE_AVATAR_26',
+          gaia_given_name:                displayName,
+          gaia_id:                        gaiaId,
+          gaia_name:                      displayName,
+          hosted_domain:                  '',
+          is_consented_primary_account:   gaiaId ? true : false,
+          is_ephemeral:                   false,
+          is_using_default_avatar:        true,
+          is_using_default_name:          false,
+          name:                           displayName,
+          shortcut_name:                  displayName,
+          user_name:                      email,
+          profile_customization_complete: true,
         },
       },
       last_active_profiles: ['Default'],
-      profiles_created:     1,
+      profiles_created:     2,
     },
   };
   fs.writeFileSync(path.join(profileDir, 'Local State'), JSON.stringify(localState, null, 2));
 
-  // ── Write Default/Preferences ─────────────────────────────────────────────
-  // Correct pref key names from Chromium source signin_pref_names.cc:
-  //   kGoogleServicesUserAccountId → "google.services.user_account_id"
-  //   kGoogleServicesUsername      → "google.services.username"
-  //   kGoogleServicesLastUsername  → "google.services.last_username"
-  //   kSignedInTime                → "signin.signedin_time"  (microseconds)
-  //   kSigninAllowed               → "signin.allowed"
-  // These tell Chrome which account to link the DICE token to when it fires.
-  if (gaiaId) {
-    const preferences = {
+  const preferences = {
+    profile: {
+      name:                   displayName,
+      is_using_default_name:  false,
+      customization_complete: true,
+    },
+    browser: {
+      has_seen_welcome_page: true,
+    },
+    ...(gaiaId ? {
       account_info: [{
         account_id:  gaiaId,
         email:       email,
-        full_name:   fullName || email,
-        given_name:  (fullName || email).split(' ')[0],
+        full_name:   displayName,
+        given_name:  displayName.split(' ')[0],
         gaia:        gaiaId,
         locale:      'en',
         picture_url: '',
@@ -137,31 +129,15 @@ async function launchProfile({ profileId, email, userId, browserState }) {
       },
       signin: {
         allowed:       true,
-        signedin_time: Date.now() * 1000, // microseconds since epoch
+        signedin_time: Date.now() * 1000,
       },
-    };
-    fs.writeFileSync(
-      path.join(defaultDir, 'Preferences'),
-      JSON.stringify(preferences, null, 2)
-    );
-    console.log(`[FIONA] Preferences written — GAIA: ${gaiaId}`);
-  } else {
-    console.warn('[FIONA] No GAIA ID — Preferences skipped, Chrome will not browser-sign-in');
-  }
+    } : {}),
+  };
+  fs.writeFileSync(path.join(defaultDir, 'Preferences'), JSON.stringify(preferences, null, 2));
+  console.log(`[FIONA] Profile files written — GAIA: ${gaiaId || '(none)'}`);
 
-  // ── Locate real Google Chrome ─────────────────────────────────────────────
-  // CRITICAL: Patchright bundles "Chrome for Testing" — a Chromium build that has
-  // NO Google OAuth client credentials. DICE (cookie→OAuth2 token exchange) is
-  // disabled at runtime in builds without HasOAuthClientConfigured() (confirmed:
-  // account_consistency_mode_manager.cc). Without DICE, Default/Web Data is never
-  // populated, Chrome never shows as browser-signed-in, passwords never appear in
-  // Chrome's native password manager.
-  // Real Google Chrome (the binary on the technician's PC) has the OAuth credentials
-  // compiled in → DICE fires on accounts.google.com navigation → token stored →
-  // browser signed in. Use it when available; fall back to Patchright's bundled
-  // browser when Chrome is not installed.
   function findChrome() {
-    const candidates = process.platform === 'win32'
+    const c = process.platform === 'win32'
       ? [
           'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
           'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -169,31 +145,17 @@ async function launchProfile({ profileId, email, userId, browserState }) {
         ]
       : process.platform === 'darwin'
       ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
-      : [
-          '/usr/bin/google-chrome',
-          '/usr/bin/google-chrome-stable',
-          '/usr/bin/chromium-browser',
-        ];
-
-    for (const c of candidates) {
-      try { if (fs.existsSync(c)) return c; } catch (_) {}
-    }
+      : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'];
+    for (const p of c) { try { if (fs.existsSync(p)) return p; } catch (_) {} }
     return undefined;
   }
-
   const chromeExe = findChrome();
-  if (chromeExe) {
-    console.log(`[FIONA] Real Google Chrome found — DICE enabled: ${chromeExe}`);
-  } else {
-    console.warn('[FIONA] Real Chrome not found — DICE will NOT fire, browser sign-in will not work');
-  }
+  console.log(chromeExe
+    ? `[FIONA] Real Chrome found — DICE enabled: ${chromeExe}`
+    : '[FIONA] Real Chrome NOT found — using bundled Chromium');
 
-  // ── Launch browser ────────────────────────────────────────────────────────
-  // --disable-sync NOT included — it blocks DICE.
-  // --disable-signin-promo and SyncSetupWizardOnFirstSignin suppress the
-  // "Turn on sync?" dialog without blocking the DICE token exchange itself.
   const context = await chromium.launchPersistentContext(profileDir, {
-    executablePath: chromeExe,   // Real Chrome = DICE works. undefined = bundled (DICE off).
+    executablePath: chromeExe,
     headless: false,
     viewport: { width: 1280, height: 800 },
     args: [
@@ -205,55 +167,32 @@ async function launchProfile({ profileId, email, userId, browserState }) {
     ],
   });
 
-  // Auto-dismiss any sync setup dialog Chrome opens after DICE completes
   context.on('page', async (newPage) => {
     try {
       await newPage.waitForLoadState('domcontentloaded', { timeout: 5000 });
       const url = newPage.url();
-
       if (url.startsWith('chrome://sync-confirmation')) {
-        // MUST accept — this is what downloads passwords from Google's servers.
-        // Profile dir is ephemeral (tmpdir) so nothing harmful gets uploaded.
-        console.log('[FIONA] Accepting sync confirmation → passwords will sync');
-        const confirmed = await newPage
-          .locator([
-            'cr-button.action-button',
-            'cr-button[class*="confirm"]',
-            'cr-button:has-text("Yes, I\'m in")',
-            'cr-button:has-text("Turn on")',
-            'cr-button:has-text("OK")',
-          ].join(', '))
-          .first()
-          .click({ timeout: 5000 })
-          .then(() => true)
-          .catch(() => false);
-
-        if (!confirmed) {
-          // Fallback: last cr-button is usually the primary action
-          await newPage.locator('cr-button').last().click({ timeout: 3000 }).catch(() => {});
-        }
-        // Do NOT close the tab — let Chrome complete the sync flow on its own
+        console.log('[FIONA] Accepting sync → passwords will sync');
+        const clicked = await newPage
+          .locator('cr-button.action-button, cr-button[class*="confirm"], cr-button:has-text("Yes"), cr-button:has-text("Turn on")')
+          .first().click({ timeout: 5000 }).then(() => true).catch(() => false);
+        if (!clicked) await newPage.locator('cr-button').last().click({ timeout: 3000 }).catch(() => {});
+      } else if (url.startsWith('chrome://profile-customization')) {
+        console.log('[FIONA] Dismissing profile-customization dialog');
+        await newPage.locator('input[type="text"]').fill(displayName, { timeout: 3000 }).catch(() => {});
+        await newPage.locator('cr-button.action-button, cr-button:has-text("Done")').first().click({ timeout: 3000 }).catch(() => {});
       } else if (
         url.startsWith('chrome://signin-email-confirmation') ||
         url.startsWith('chrome://sync-setup') ||
         url.includes('syncSetup')
       ) {
-        // Other sign-in dialogs (not the sync consent) can be dismissed
-        console.log(`[FIONA] Dismissing dialog: ${url}`);
-        await newPage
-          .locator('cr-button[class*="cancel"], button:has-text("No thanks"), button:has-text("Skip")')
-          .first()
-          .click({ timeout: 3000 })
-          .catch(() => {});
+        await newPage.locator('cr-button[class*="cancel"], button:has-text("No thanks"), button:has-text("Skip")')
+          .first().click({ timeout: 3000 }).catch(() => {});
         await newPage.close().catch(() => {});
       }
     } catch (_) {}
   });
 
-  // ── Seed localStorage per origin BEFORE any navigation (DP bypass) ────────
-  // addInitScript() runs before any page JavaScript executes.
-  // Google's device-trust tokens in localStorage are present when their
-  // scripts run → Google sees a known device → no DP challenge.
   for (const originData of (playwrightState?.origins ?? [])) {
     if (!originData.localStorage?.length) continue;
     await context.addInitScript(
@@ -268,12 +207,11 @@ async function launchProfile({ profileId, email, userId, browserState }) {
     );
   }
 
-  // ── Inject cookies ────────────────────────────────────────────────────────
-  if (playwrightState?.cookies?.length) {
+  const cookieSrc = playwrightState?.cookies || [];
+  if (cookieSrc.length) {
     try {
-      const normalized = normalizeCookies(playwrightState.cookies);
-      await context.addCookies(normalized);
-      console.log(`[FIONA] ${normalized.length} cookies injected`);
+      await context.addCookies(normalizeCookies(cookieSrc));
+      console.log(`[FIONA] ${cookieSrc.length} cookies injected`);
     } catch (e) {
       console.error('[FIONA] Cookie injection error:', e.message);
     }
@@ -281,42 +219,44 @@ async function launchProfile({ profileId, email, userId, browserState }) {
     console.warn('[FIONA] No cookies in browserState');
   }
 
-  // ── Trigger DICE via accounts.google.com ──────────────────────────────────
-  // With real Chrome + valid GAIA cookies (SID, SSID, etc.) + Preferences set:
-  // Chrome sends DICE request header → Google responds with authorization_code
-  // in X-Chrome-Manage-Accounts → Chrome exchanges code for OAuth2 refresh token
-  // via GaiaAuthFetcher → token stored in Default/Web Data → browser signed in.
-  // The 6-second wait covers the async background token exchange.
-  // Navigate to accounts.google.com to trigger the DICE background token exchange.
-  // We use ListAccounts (JSON endpoint) so no sign-in UI appears.
-  // After 8 s the exchange is done; close this tab so the user only sees Gmail.
   const pages = context.pages();
-  const diceTab = pages.length > 0 ? pages[0] : await context.newPage();
-  await diceTab.goto('https://accounts.google.com/ListAccounts?gpsia=1&json=1', {
-    waitUntil: 'domcontentloaded',
-    timeout: 20000,
+  const firstTab = pages.length > 0 ? pages[0] : await context.newPage();
+  await firstTab.goto('https://accounts.google.com/ListAccounts?gpsia=1&json=1', {
+    waitUntil: 'domcontentloaded', timeout: 20000,
   }).catch(() => {});
-  await diceTab.waitForTimeout(8000); // DICE + sync confirmation fires within this window
-  await diceTab.close().catch(() => {}); // Clean up — user only sees Gmail tab
 
-  // ── Open Gmail ────────────────────────────────────────────────────────────
+  if (accountsIdb && Object.keys(accountsIdb).length > 0) {
+    await firstTab.evaluate(async (idb) => {
+      for (const [dbName, dbInfo] of Object.entries(idb)) {
+        try {
+          const db = await new Promise((res, rej) => {
+            const req = indexedDB.open(dbName, dbInfo.version);
+            req.onupgradeneeded = () => {};
+            req.onsuccess = () => res(req.result);
+            req.onerror   = () => rej(req.error);
+          });
+          for (const [storeName, records] of Object.entries(dbInfo.stores)) {
+            try {
+              const tx    = db.transaction(storeName, 'readwrite');
+              const store = tx.objectStore(storeName);
+              for (const record of records) store.put(record);
+              await new Promise(res => { tx.oncomplete = res; tx.onerror = res; });
+            } catch (_) {}
+          }
+          db.close();
+        } catch (_) {}
+      }
+    }, accountsIdb).catch(e => console.warn('[FIONA] IDB restore warn:', e.message));
+    console.log(`[FIONA] IndexedDB restored — ${Object.keys(accountsIdb).length} databases`);
+  }
+
+  await firstTab.waitForTimeout(8000);
+  await firstTab.close().catch(() => {});
+
   const gmailTab = await context.newPage();
-  await gmailTab.goto('https://mail.google.com', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30000,
-  });
+  await gmailTab.goto('https://mail.google.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await gmailTab.bringToFront();
-
-  // ── Open passwords.google.com ─────────────────────────────────────────────
-  // Web-based Google Password Manager — works with session cookies alone.
-  // Chrome's native chrome://password-manager populates once DICE completes.
-  const pwTab = await context.newPage();
-  await pwTab.goto('https://passwords.google.com', {
-    waitUntil: 'domcontentloaded',
-    timeout: 30000,
-  });
-  await pwTab.bringToFront();
-  await pwTab.waitForTimeout(2000);
+  await gmailTab.waitForTimeout(3000);
 
   const finalUrl  = gmailTab.url();
   const pageTitle = await gmailTab.title();
@@ -326,9 +266,7 @@ async function launchProfile({ profileId, email, userId, browserState }) {
   const authenticated =
     pageTitle.toLowerCase().includes('inbox') ||
     pageTitle.includes('@gmail.com') ||
-    (finalUrl.includes('mail.google.com') &&
-      !finalUrl.includes('/signin') &&
-      !finalUrl.includes('/ServiceLogin'));
+    (finalUrl.includes('mail.google.com') && !finalUrl.includes('/signin') && !finalUrl.includes('/ServiceLogin'));
 
   activeBrowsers.set(profileId, { context, userId });
 
